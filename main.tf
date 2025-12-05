@@ -28,7 +28,7 @@ module "aurora_postgres_cluster" {
   vpc_cidr                = "172.16.0.0/16"
   subnet_ids              = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
   vpc_endpoint_subnet_ids = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
-  db_master_username      = "Admin"
+  db_master_username      = "postgreSQLdbAdmin"
   # byte_length             = 3
   tags = {
     Environment = "prod"
