@@ -253,8 +253,9 @@ data "aws_vpc_endpoint_service" "secretsmanager" {
 }
 
 resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = var.vpc_id
-  service_name        = data.aws_vpc_endpoint_service.secretsmanager.service_name
+  vpc_id = var.vpc_id
+  # service_name        = data.aws_vpc_endpoint_service.secretsmanager.service_name
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = var.vpc_endpoint_subnet_ids
   security_group_ids  = [aws_security_group.vpce.id]
