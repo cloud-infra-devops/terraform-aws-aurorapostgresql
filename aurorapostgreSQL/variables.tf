@@ -1,3 +1,6 @@
+variable "byte_length" {
+  type = number
+}
 variable "name" {
   description = "Base name for resources."
   type        = string

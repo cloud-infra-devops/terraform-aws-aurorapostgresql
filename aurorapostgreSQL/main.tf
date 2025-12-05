@@ -7,6 +7,9 @@ resource "random_password" "master" {
   override_special = "!@#$%&*()-_=+[]{}<>?"
   special          = true
 }
+resource "random_id" "id" {
+  byte_length = var.byte_length
+}
 locals {
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
   cluster_identifier = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
@@ -198,7 +201,7 @@ resource "aws_rds_cluster_instance" "this" {
 
 # Secrets Manager secret for DB master credentials (encrypted with KMS)
 resource "aws_secretsmanager_secret" "db_master" {
-  name        = local.secret_name
+  name        = "${local.secret_name}-${random_id.index.hex}"
   description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
   kms_key_id  = local.kms_key_arn
   tags        = merge(var.tags, { Name = "${local.secret_name}" })
