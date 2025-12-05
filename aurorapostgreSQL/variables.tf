@@ -157,7 +157,7 @@ variable "preferred_backup_window" {
 variable "preferred_maintenance_window" {
   description = "Maintenance window (UTC)."
   type        = string
-  default     = "sun:03:00-sun:06:00"
+  default     = "sun:06:00-sun:11:00"
 }
 
 variable "apply_immediately" {
