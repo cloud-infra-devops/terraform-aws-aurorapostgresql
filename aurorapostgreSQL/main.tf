@@ -6,13 +6,20 @@ data "archive_file" "lambda_function_zip" {
   source_file = "${path.module}/lambda_function.py"
   output_path = "${path.module}/lambda_function.zip"
 }
-data "aws_rds_orderable_db_instance" "aurora_pg" {
-  engine         = "aurora-postgresql"
-  engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg.version
-  # For clusters, RDS looks at instance classes; ensure the one you set is orderable with the version in your AZs.
-  instance_class = var.instance_class
-  license_model  = "postgresql-license"
+data "aws_rds_engine_version" "aurora_pg_versions" {
+  engine = "aurora-postgresql"
+  # Use this to filter for the latest minor version within a major version
+  # parameter_group_family = "postgres14" # Example: for PostgreSQL 14
+  # parameter_group_family = "postgres15" # Example: for PostgreSQL 15
+  latest = true # Set to true to get the latest available
 }
+# data "aws_rds_orderable_db_instance" "aurora_pg" {
+#   engine         = "aurora-postgresql"
+#   engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg.version
+#   # For clusters, RDS looks at instance classes; ensure the one you set is orderable with the version in your AZs.
+#   instance_class = var.instance_class
+#   license_model  = "postgresql-license"
+# }
 # Generate a secure initial master password (will be stored in Secrets Manager and used to configure the cluster)
 resource "random_password" "master" {
   length           = 24
@@ -193,7 +200,7 @@ resource "aws_rds_cluster" "this" {
   depends_on                          = [aws_secretsmanager_secret.db_master]
   cluster_identifier                  = local.cluster_identifier
   engine                              = "aurora-postgresql"
-  engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg.version
+  engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
   master_username                     = var.db_master_username
   master_password                     = random_password.master.result
   database_name                       = var.database_name
