@@ -220,11 +220,11 @@ resource "aws_secretsmanager_secret_version" "initial" {
   })
 }
 
-# # Construct default rotation lambda ARN if not provided and not creating rotation lambda in-module
-# locals {
-#   default_rotation_lambda_arn = var.rotation_lambda_arn != "" ? var.rotation_lambda_arn : "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.name}:${var.rotation_lambda_account}:function:SecretsManagerPostgreSQLRotationSingleUser"
-#   rotation_lambda_to_use      = var.create_rotation_lambda ? "" : (var.rotation_lambda_arn != "" ? var.rotation_lambda_arn : local.default_rotation_lambda_arn)
-# }
+# Construct default rotation lambda ARN if not provided and not creating rotation lambda in-module
+locals {
+  default_rotation_lambda_arn = var.existing_rotation_lambda_arn != "" ? var.existing_rotation_lambda_arn : "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.name}:${var.rotation_lambda_account}:function:SecretsManagerPostgreSQLRotationSingleUser"
+  rotation_lambda_to_use      = var.create_rotation_lambda ? "" : (var.existing_rotation_lambda_arn != "" ? var.existing_rotation_lambda_arn : local.default_rotation_lambda_arn)
+}
 
 # --- Secrets Manager VPC endpoint and SGs ---
 
