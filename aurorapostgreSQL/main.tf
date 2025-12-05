@@ -337,7 +337,7 @@ resource "aws_iam_role_policy" "rotation_inline" {
 
 resource "aws_security_group" "rotator_lambda_security_group" {
   name   = "rotator_lambda_security_group"
-  vpc_id = aws_vpc.aws-secrets-manager-vpc.id
+  vpc_id = var.vpc_id
 
   tags = {
     Name = "rotator_lambda_security_group"
@@ -507,7 +507,7 @@ resource "aws_secretsmanager_secret_rotation" "this" {
 # }
 
 # Resource policy for the secret limiting access to rotation role and account root
-resource "aws_secretsmanager_resource_policy" "secret_policy" {
+resource "aws_secretsmanager_secret_policy" "secret_policy" {
   secret_arn = aws_secretsmanager_secret.db_master.arn
   policy = jsonencode({
     Version = "2012-10-17",
