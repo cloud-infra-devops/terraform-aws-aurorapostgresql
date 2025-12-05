@@ -1,15 +1,20 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 data "aws_region" "current" {}
+data "archive_file" "lambda_function_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda_function.py"
+  output_path = "${path.module}/lambda_function.zip"
+}
 # Generate a secure initial master password (will be stored in Secrets Manager and used to configure the cluster)
 resource "random_password" "master" {
   length           = 24
   override_special = "!@#$%&*()-_=+[]{}<>?"
   special          = true
 }
-resource "random_id" "id" {
-  byte_length = var.byte_length
-}
+# resource "random_id" "id" {
+#   byte_length = var.byte_length
+# }
 locals {
   depends_on         = [aws_kms_key.this, aws_secretsmanager_secret.db_master]
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
@@ -76,6 +81,24 @@ resource "aws_kms_key" "this" {
             "kms:ViaService" = "secretsmanager.${data.aws_region.current.region}.amazonaws.com"
           }
         }
+      },
+      {
+        Sid       = "AllowCloudWatchLogsUseOfTheKey",
+        Effect    = "Allow",
+        Principal = { Service = "logs.amazonaws.com" },
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKey",
+          "kms:ReEncrypt*"
+        ],
+        Resource = "*",
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "logs.${data.aws_region.current.region}.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -127,51 +150,32 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
-# Parameter group for Aurora PostgreSQL
 resource "aws_rds_cluster_parameter_group" "this" {
   name        = "${local.cluster_identifier}-pg"
   family      = var.cluster_parameter_family
   description = "Aurora PostgreSQL parameter group for ${local.cluster_identifier}"
 
-  # Log statements: none | ddl | mod | all
-  parameter {
-    name  = "log_statement"
-    value = var.log_statement
-  }
-
-  # Log queries slower than N ms; -1 disables (default).
-  parameter {
-    name  = "log_min_duration_statement"
-    value = tostring(var.log_min_duration_statement_ms)
-  }
-
-  # Log minimum error severity: debug5..fatal, or error/warning/notice
-  parameter {
-    name  = "log_min_error_statement"
-    value = var.log_min_error_statement
-  }
-
-  # Error verbosity: default | verbose | terse
-  parameter {
-    name  = "log_error_verbosity"
-    value = var.log_error_verbosity
-  }
-
-  # Enable CloudWatch Logs export if requested
-  parameter {
-    name  = "rds.enable_log_types"
-    value = join(",", local.log_types)
-  }
-
-  # Additional custom parameters
-  dynamic "parameter" {
-    for_each = var.additional_cluster_parameters
-    content {
-      name         = parameter.value.name
-      value        = parameter.value.value
-      apply_method = lookup(parameter.value, "apply_method", null)
-    }
-  }
+  # parameters = concat(
+  #   [
+  #     {
+  #       name  = "log_statement"
+  #       value = var.log_statement
+  #     },
+  #     {
+  #       name  = "log_min_duration_statement"
+  #       value = tostring(var.log_min_duration_statement_ms)
+  #     },
+  #     {
+  #       name  = "log_min_error_statement"
+  #       value = var.log_min_error_statement
+  #     },
+  #     {
+  #       name  = "log_error_verbosity"
+  #       value = var.log_error_verbosity
+  #     }
+  #   ],
+  #   var.additional_cluster_parameters
+  # )
 
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-cluster-params" })
 }
@@ -399,140 +403,141 @@ resource "aws_security_group_rule" "lambda_security_group_ingress_rule" {
   security_group_id = aws_security_group.rotator_lambda_security_group.id
 }
 
-resource "random_id" "index" {
-  byte_length = 2
-}
+# resource "random_id" "index" {
+#   byte_length = 2
+# }
 
-locals {
-  # region -> AWS account IDs that host the AWS-managed Secrets Manager rotation functions
-  # This mapping is used to construct the ARN for the single-user RDS PostgreSQL rotation function:
-  # SecretsManagerRDSPostgreSQLRotationSingleUser
-  # Source: AWS Secrets Manager rotation function templates (AWS docs) / community references.
-  aws_rotation_accounts = {
-    "us-east-1"      = "297356227824"
-    "us-east-2"      = "272243774136"
-    "us-west-1"      = "074427151427"
-    "us-west-2"      = "679388152427"
-    "af-south-1"     = "837727923574"
-    "ap-east-1"      = "568494199844"
-    "ap-south-1"     = "980640731160"
-    "ap-northeast-1" = "249141392436"
-    "ap-northeast-2" = "819880672187"
-    "ap-northeast-3" = "075579246818"
-    "ap-southeast-1" = "718646579143"
-    "ap-southeast-2" = "568782711913"
-    "ca-central-1"   = "680589152509"
-    "eu-central-1"   = "537616424511"
-    "eu-west-1"      = "985815780053"
-    "eu-west-2"      = "434816350285"
-    "eu-west-3"      = "644151839549"
-    "eu-north-1"     = "365925373257"
-    "eu-south-1"     = "054676820928"
-    "me-south-1"     = "772402452960"
-    "sa-east-1"      = "856723963003"
-  }
-}
+# locals {
+#   # region -> AWS account IDs that host the AWS-managed Secrets Manager rotation functions
+#   # This mapping is used to construct the ARN for the single-user RDS PostgreSQL rotation function:
+#   # SecretsManagerRDSPostgreSQLRotationSingleUser
+#   # Source: AWS Secrets Manager rotation function templates (AWS docs) / community references.
+#   aws_rotation_accounts = {
+#     "us-east-1"      = "297356227824"
+#     "us-east-2"      = "272243774136"
+#     "us-west-1"      = "074427151427"
+#     "us-west-2"      = "679388152427"
+#     "af-south-1"     = "837727923574"
+#     "ap-east-1"      = "568494199844"
+#     "ap-south-1"     = "980640731160"
+#     "ap-northeast-1" = "249141392436"
+#     "ap-northeast-2" = "819880672187"
+#     "ap-northeast-3" = "075579246818"
+#     "ap-southeast-1" = "718646579143"
+#     "ap-southeast-2" = "568782711913"
+#     "ca-central-1"   = "680589152509"
+#     "eu-central-1"   = "537616424511"
+#     "eu-west-1"      = "985815780053"
+#     "eu-west-2"      = "434816350285"
+#     "eu-west-3"      = "644151839549"
+#     "eu-north-1"     = "365925373257"
+#     "eu-south-1"     = "054676820928"
+#     "me-south-1"     = "772402452960"
+#     "sa-east-1"      = "856723963003"
+#   }
+# }
 
-resource "aws_serverlessapplicationrepository_cloudformation_stack" "secrets_rotator" {
-  name           = "Rotator-${random_id.id.hex}"
-  application_id = "arn:aws:serverlessrepo:${data.aws_region.current.region}:${local.aws_rotation_accounts[data.aws_region.current.region]}:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
-  # application_id = "arn:aws:serverlessrepo:${data.aws_region.current.region}:297356227824:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
-  capabilities = [
-    "CAPABILITY_IAM",
-    "CAPABILITY_RESOURCE_POLICY",
-  ]
-  parameters = {
-    functionName        = "LambdaRotator-${random_id.id.hex}"
-    endpoint            = "https://secretsmanager.${data.aws_region.current.region}.${data.aws_partition.current.dns_suffix}"
-    secretArn           = aws_secretsmanager_secret.db_master.arn
-    vpcSubnetIds        = join(",", var.vpc_endpoint_subnet_ids)
-    vpcSecurityGroupIds = aws_security_group.rotator_lambda_security_group.id
-  }
-}
+# resource "aws_serverlessapplicationrepository_cloudformation_stack" "secrets_rotator" {
+#   name           = "Rotator-${random_id.id.hex}"
+#   application_id = "arn:aws:serverlessrepo:${data.aws_region.current.region}:${local.aws_rotation_accounts[data.aws_region.current.region]}:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
+#   # application_id = "arn:aws:serverlessrepo:${data.aws_region.current.region}:297356227824:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
+#   capabilities = [
+#     "CAPABILITY_IAM",
+#     "CAPABILITY_RESOURCE_POLICY",
+#   ]
+#   parameters = {
+#     functionName        = "LambdaRotator-${random_id.id.hex}"
+#     endpoint            = "https://secretsmanager.${data.aws_region.current.region}.${data.aws_partition.current.dns_suffix}"
+#     secretArn           = aws_secretsmanager_secret.db_master.arn
+#     vpcSubnetIds        = join(",", var.vpc_endpoint_subnet_ids)
+#     vpcSecurityGroupIds = aws_security_group.rotator_lambda_security_group.id
+#   }
+# }
 
 # If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
 # Rotation using AWS managed single-user rotation Lambda function
 resource "aws_secretsmanager_secret_rotation" "this" {
-  depends_on = [aws_secretsmanager_secret_version.db_master]
-  count      = var.enable_auto_secrets_rotation ? 1 : 0
-  secret_id  = aws_secretsmanager_secret.db_master.id
-  # rotation_lambda_arn = aws_lambda_function.rotation.arn
-  rotation_lambda_arn = aws_serverlessapplicationrepository_cloudformation_stack.secrets_rotator.outputs.RotationLambdaARN
+  depends_on          = [aws_secretsmanager_secret_version.db_master]
+  count               = var.enable_auto_secrets_rotation ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.db_master.id
+  rotation_lambda_arn = aws_lambda_function.rotation.arn
+  # rotation_lambda_arn = aws_serverlessapplicationrepository_cloudformation_stack.secrets_rotator.outputs.RotationLambdaARN
   rotation_rules {
     automatically_after_days = var.rotation_days
   }
 }
 
-# # AWS managed single-user rotation Lambda function code via Lambda ARN or deploying from AWS provided blueprint
-# # Here we use the AWS managed rotation function hosted as a Lambda in your account via a published blueprint package.
-# # For portability, we deploy a minimal lambda with VPC config, using container image or zip from AWS sample S3.
-# resource "aws_iam_role" "lambda_exec" {
-#   name = "${local.cluster_identifier}-lambda-exec-role"
-#   assume_role_policy = jsonencode({
-#     Version = "2012-10-17",
-#     Statement = [{
-#       Effect    = "Allow",
-#       Principal = { Service = "lambda.amazonaws.com" },
-#       Action    = "sts:AssumeRole"
-#     }]
-#   })
-#   tags = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-exec" })
-# }
+# AWS managed single-user rotation Lambda function code via Lambda ARN or deploying from AWS provided blueprint
+# Here we use the AWS managed rotation function hosted as a Lambda in your account via a published blueprint package.
+# For portability, we deploy a minimal lambda with VPC config, using container image or zip from AWS sample S3.
+resource "aws_iam_role" "lambda_exec" {
+  name = "${local.cluster_identifier}-lambda-exec-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "lambda.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-exec" })
+}
 
-# resource "aws_iam_role_policy_attachment" "lambda_basic" {
-#   role       = aws_iam_role.lambda_exec.name
-#   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-# }
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
 
-# # Allow Lambda access to VPC for Secrets Manager VPCE
-# resource "aws_iam_role_policy" "lambda_vpc" {
-#   name = "${local.cluster_identifier}-lambda-vpc"
-#   role = aws_iam_role.lambda_exec.id
-#   policy = jsonencode({
-#     Version = "2012-10-17",
-#     Statement = [
-#       {
-#         Effect = "Allow",
-#         Action = [
-#           "ec2:CreateNetworkInterface",
-#           "ec2:DescribeNetworkInterfaces",
-#           "ec2:DeleteNetworkInterface"
-#         ],
-#         Resource = "*"
-#       }
-#     ]
-#   })
-# }
+# Allow Lambda access to VPC for Secrets Manager VPCE
+resource "aws_iam_role_policy" "lambda_vpc" {
+  name = "${local.cluster_identifier}-lambda-vpc"
+  role = aws_iam_role.lambda_exec.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
 
-# # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
-# resource "aws_lambda_function" "rotation" {
-#   function_name    = "${local.cluster_identifier}-rotation"
-#   role             = aws_iam_role.lambda_exec.arn
-#   runtime          = "python3.12"
-#   handler          = "lambda_function.lambda_handler"
-#   filename         = var.rotation_lambda_zip
-#   source_code_hash = filebase64sha256(var.rotation_lambda_zip)
-#   timeout          = 900
-#   memory_size      = 256
+# Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
+resource "aws_lambda_function" "rotation" {
+  function_name = "${local.cluster_identifier}-rotation"
+  role          = aws_iam_role.lambda_exec.arn
+  runtime       = "python3.12"
+  handler       = "lambda_function.lambda_handler"
+  # filename         = var.rotation_lambda_zip
+  filename         = data.archive_file.lambda_function_zip.output_path
+  source_code_hash = filebase64sha256(data.archive_file.lambda_function_zip.output_path)
+  timeout          = 900
+  memory_size      = 256
 
-#   vpc_config {
-#     subnet_ids         = var.lambda_subnet_ids
-#     security_group_ids = [aws_security_group.db.id]
-#   }
+  vpc_config {
+    subnet_ids         = var.lambda_subnet_ids
+    security_group_ids = [aws_security_group.db.id]
+  }
 
-#   environment {
-#     variables = {
-#       SECRET_ARN      = aws_secretsmanager_secret.db_master.arn
-#       RDS_CLUSTER_ARN = aws_rds_cluster.this.arn
-#       KMS_KEY_ARN     = local.kms_key_arn
-#       DB_ENGINE       = "postgres"
-#       VPC_ENDPOINT_SM = aws_vpc_endpoint.secretsmanager.id
-#     }
-#   }
+  environment {
+    variables = {
+      SECRET_ARN      = aws_secretsmanager_secret.db_master.arn
+      RDS_CLUSTER_ARN = aws_rds_cluster.this.arn
+      KMS_KEY_ARN     = local.kms_key_arn
+      DB_ENGINE       = "postgres"
+      VPC_ENDPOINT_SM = aws_vpc_endpoint.secretsmanager.id
+    }
+  }
 
-#   depends_on = [aws_vpc_endpoint.secretsmanager]
-#   tags       = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
-# }
+  depends_on = [aws_vpc_endpoint.secretsmanager]
+  tags       = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
+}
 
 # Resource policy for the secret limiting access to rotation role and account root
 resource "aws_secretsmanager_secret_policy" "secret_policy" {
