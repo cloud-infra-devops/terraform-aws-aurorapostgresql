@@ -23,7 +23,7 @@ resource "random_password" "db_master" {
 }
 
 locals {
-  depends_on = [random_password.db_master]
+  # depends_on = [random_password.db_master]
   effective_master_password = var.db_master_password != null ? var.db_master_password : (
     var.generate_master_password ? random_password.db_master[0].result : null
   )
