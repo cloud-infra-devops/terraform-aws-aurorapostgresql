@@ -1,75 +1,92 @@
-```markdown
-# terraform-aws-aurora-postgres-cluster
+# Aurora PostgreSQL Cluster Terraform Module
 
-This Terraform module provisions an Amazon Aurora PostgreSQL cluster with:
+This module creates a production-ready Aurora PostgreSQL cluster with:
+- Encryption at rest via KMS (new CMK or existing CMK)
+- Secrets Manager secret for master credentials (encrypted with KMS)
+- Optional automatic rotation using AWS managed single-user Lambda rotator every N days
+- Least-privilege IAM roles and resource policies
+- CloudWatch Logs export for error/slow query logs
+- Optional CloudWatch metrics and alarms, including custom slow query metrics
+- Interface VPC Endpoint for Secrets Manager to keep rotation calls private
 
-- Optional creation of a KMS Customer Master Key (CMK) or use of an existing CMK
-- Storage of DB master credentials in AWS Secrets Manager encrypted with the KMS key
-- Automatic secret creation and rotation using either:
-  - an AWS-managed rotation Lambda (default auto-constructed ARN), or
-  - an optional rotation Lambda deployed into this module (providing predictable VPC access)
-- Optional creation of an interface VPC Endpoint for AWS Secrets Manager so secret traffic between the rotation Lambda and Secrets Manager remains inside your VPC
-- Creation of a dedicated Security Group for the Secrets Manager VPC Endpoint that opens only TCP/443 from explicitly allowed sources
-- If you opt in to deploy the rotation Lambda in this module, the rotation Lambda will be created with:
-  - its own security group (attached to same VPC/subnets you provide),
-  - an IAM role with least-privilege-ish permissions required to run rotation (review & tighten to match your security posture),
-  - a lambda permission that allows Secrets Manager to invoke it,
-  - automatic addition of the rotation Lambda SG to the allowed list for the Secrets Manager VPC Endpoint.
-- Narrowed endpoint SG egress using the AWS-managed Secrets Manager prefix list so endpoint ENIs only egress to the Secrets Manager service IP ranges in your region (least-privilege egress).
-- Optional CloudWatch Logs export for PostgreSQL logs (errors & slow queries) and creation of CloudWatch metric filters and an example alarm.
+## Usage
 
-Important usage notes
-- Rotation Lambda code: this module can deploy a rotation Lambda for you, but you must provide the Lambda code as an S3 object (bucket/key and optional object version). The module will create the Lambda function and required IAM role and VPC configuration. If you prefer to use an existing rotation Lambda (for example AWS-managed rotator or your own pre-deployed function), do not enable create_rotation_lambda and instead pass the rotation lambda ARN via `rotation_lambda_arn` and include its SG in `allowed_vpc_endpoint_source_security_group_ids`.
-- Networking: The rotation Lambda (whether created here or external) must have VPC subnets and SGs that allow it to connect to the DB instances (port 5432 by default). If you create the rotation Lambda here the module will create a SG that allows outbound to the DB security group on the DB port.
-- KMS: If you create a CMK via this module we add KMS permissions for Secrets Manager, RDS and the configured rotation-lambda account. Review and tighten the KMS key policy as required by your security policy.
-- Review IAM policies: The module attempts to follow least privilege but rotating DB credentials requires a few broad permissions (secretsmanager actions against the secret and logs). Review the IAM role policy for the Lambda and tighten resources/actions to comply with your corporate security policy.
-
-Example (create rotation Lambda in-module)
 ```hcl
-module "db" {
-  source = "./terraform-aws-aurora-postgres-cluster"
+module "aurora_postgres_cluster" {
+  source = "./modules/aurora-postgres"
 
-  name                   = "prod-db"
-  vpc_id                 = "vpc-0example"
-  subnet_ids             = ["subnet-aaa", "subnet-bbb"]
-  vpc_security_group_ids = ["sg-db-app"]
-  master_username        = "dbadmin"
-  database_name          = "appdb"
+  name                      = "prod-app"
+  region                    = "us-east-1"
+  vpc_id                    = "vpc-0123456789abcdef0"
+  subnet_ids                = ["subnet-a", "subnet-b", "subnet-c"]
+  vpc_endpoint_subnet_ids   = ["subnet-a", "subnet-b"]
+  lambda_subnet_ids         = ["subnet-a", "subnet-b"]
 
-  create_kms_key         = true
+  allowed_cidr_blocks       = ["10.0.0.0/16"]
+  allowed_security_group_ids = []
 
-  # Secrets Manager VPC endpoint
-  create_secretsmanager_vpc_endpoint = true
-  # allowed inbound sources for the endpoint (module will append rotation lambda SG automatically if created)
-  allowed_vpc_endpoint_source_security_group_ids = ["sg-app-01"]
+  db_master_username        = "masteruser"
+  db_master_password        = "S3cureP@ssw0rd!"
+  database_name             = "appdb"
 
-  # Create rotation Lambda inside this module and provide S3 code
-  create_rotation_lambda   = true
-  rotation_lambda_s3_bucket = "my-lambda-code-bucket"
-  rotation_lambda_s3_key    = "secrets-rotation/SecretsManagerPostgreSQLRotationSingleUser.zip"
-  rotation_lambda_runtime   = "python3.9"
-  rotation_lambda_handler   = "lambda_function.lambda_handler"
-  rotation_lambda_subnet_ids = ["subnet-aaa","subnet-bbb"]
-  rotation_lambda_environment = {
-    LOG_LEVEL = "INFO"
+  use_existing_kms_key      = false
+  # existing_kms_key_arn    = "arn:aws:kms:us-east-1:111111111111:key/abcd-efgh..."
+
+  enable_rotation           = true
+  rotation_days             = 90
+  rotation_lambda_zip       = "${path.module}/rotation_lambda.zip" # Provide AWS sample zip or your packaged rotation function
+
+  enable_error_logs         = true
+  enable_slow_query_logs    = true
+  enable_slow_query_metrics = true
+
+  alarm_action_arns         = ["arn:aws:sns:us-east-1:111111111111:alerts"]
+
+  tags = {
+    Environment = "prod"
+    Application = "my-app"
   }
 }
 ```
 
-What I added in this update
-- create_rotation_lambda option: when true the module deploys a rotation Lambda using the S3 object you provide.
-- Lambda IAM role & policy: a least-privilege-ish role scoped to the secret (and KMS key when present) and CloudWatch Logs.
-- Lambda SG: created in the VPC/subnets you supply; configured to allow outbound to:
-  - the DB security group on DB port,
-  - the Secrets Manager service via the regional Secrets Manager prefix list (bound to 443).
-- The Secrets Manager interface VPC endpoint SG's egress is narrowed to use the Secrets Manager prefix list (so endpoint ENIs only egress to Secrets Manager IP ranges).
-- The rotation Lambda SG is automatically added to the allowed sources for the Secrets Manager endpoint.
-- The module creates an aws_lambda_permission to allow Secrets Manager to invoke the Lambda.
-- Outputs for the deployed Lambda ARN, SG id and IAM role.
-
-Next steps / recommendations
-1. Supply rotation Lambda code as an S3 object (bucket/key). The AWS-provided rotator zip can be used if you obtain it; otherwise reuse your own implementation that adheres to the Secrets Manager rotation function interface (createSecret, setSecret, testSecret, finishSecret).
-2. Review IAM policies added for the Lambda and tighten if you can scope more strictly.
-3. Confirm network connectivity (subnets and routing) between Lambda and DB and the endpoint.
-4. If you want, I can add an optional automatic upload of the AWS-managed rotator code into S3 from a known public location (if you provide the public URL), or include example helper scripts to build/package the rotation lambda.
+To disable automatic rotation and rely on manual rotation in AWS Secrets Manager:
+```hcl
+enable_rotation = false
 ```
+
+## Rotation Lambda
+
+This module expects a ZIP for the rotation Lambda. Use the AWS sample for single-user rotation for RDS/Aurora PostgreSQL from AWS docs, or package your own with the standard handler interface. Ensure the Lambda has VPC access to your Secrets Manager VPC Endpoint and to the RDS cluster as necessary.
+
+Alternatively, if you want to point to an existing rotation Lambda ARN, you can adapt the module by replacing the `aws_lambda_function.rotation` resource with a `variable "rotation_lambda_arn"` and set it in `aws_secretsmanager_secret_rotation`.
+
+## Inputs
+
+See `variables.tf` for the full list. Key inputs:
+- `use_existing_kms_key` and `existing_kms_key_arn` to use an existing CMK.
+- `db_master_username`, `db_master_password` for initial bootstrap; then stored in Secrets Manager.
+- `enable_rotation`, `rotation_days` control automatic rotation (default 90 days). Set `enable_rotation=false` for manual rotation.
+- `enable_error_logs`, `enable_slow_query_logs` for CloudWatch Logs export.
+- `enable_slow_query_metrics`, `slow_query_filter_pattern`, `slow_query_threshold` to create custom metrics from logs.
+
+## Least Privilege
+
+- KMS key policy grants only necessary services (RDS and Secrets Manager via service conditions) and account root.
+- Secret resource policy limits access to the rotation role and root for read.
+- Rotation role policy scopes permissions to the specific secret and cluster ARNs.
+
+## VPC Endpoint
+
+A private Interface VPC Endpoint for Secrets Manager is created to keep rotation traffic within your VPC. The Lambda is configured for VPC access and can communicate with Secrets Manager through this endpoint.
+
+## Notes
+
+- Aurora PostgreSQL supports CloudWatch Logs export for `postgresql` logs; slow query detection is implemented via log filter patterns.
+- Ensure subnets provided are private and have appropriate routing to support VPC endpoints and Lambda ENIs.
+- Supply a valid `rotation_lambda_zip` file; AWS provides sample implementations.
+
+## Outputs
+
+- `cluster_arn`, `cluster_endpoint`, `reader_endpoint`
+- `secret_arn`, `kms_key_arn`
+- `vpc_endpoint_id`, `db_security_group_id`

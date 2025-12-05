@@ -1,239 +1,268 @@
 variable "name" {
-  description = "Base name for resources (prefix)."
+  description = "Base name for resources."
   type        = string
 }
-variable "secretsmanager_prefix_list_id" {
-  description = "Optional regional EC2 managed prefix list id for AWS Secrets Manager (e.g. pl-0123456789abcdef0). If provided, endpoint and Lambda egress will be restricted to this prefix list. If empty, module will allow 0.0.0.0/0 egress as a fallback."
+
+variable "cluster_identifier" {
+  description = "Optional custom cluster identifier; defaults to name-aurora-pg."
   type        = string
-  default     = ""
+  default     = null
 }
-variable "vpc_cidr" {
-  type    = string
-  default = "172.16.0.0/16"
-}
+
 variable "vpc_id" {
-  description = "VPC id where DB, rotation lambda and Secrets Manager VPC endpoint will be created."
+  description = "VPC ID for the cluster and endpoints."
   type        = string
-  default     = ""
+}
+
+variable "vpc_cidr" {
+  type = string
 }
 
 variable "subnet_ids" {
-  description = "List of subnet IDs for the DB subnet group and for the Secrets Manager interface endpoint (must be at least 2)."
+  description = "Private subnet IDs for the DB subnet group."
+  type        = list(string)
+}
+
+variable "vpc_endpoint_subnet_ids" {
+  description = "Subnet IDs for the Secrets Manager interface VPC endpoint."
+  type        = list(string)
+}
+
+variable "lambda_subnet_ids" {
+  description = "Subnet IDs for the rotation lambda VPC config."
   type        = list(string)
   default     = []
 }
 
-variable "engine" {
-  description = "RDS engine to use. (aurora-postgresql)"
-  type        = string
-  default     = "aurora-postgresql"
+variable "allowed_cidr_blocks" {
+  description = "CIDR blocks allowed to connect to the DB port."
+  type        = list(string)
+  default     = []
+}
+
+variable "allowed_security_group_ids" {
+  description = "Existing Security group IDs allowed to connect to the DB port."
+  type        = list(string)
+  default     = []
+}
+
+variable "port" {
+  description = "PostgreSQL port."
+  type        = number
+  default     = 5432
 }
 
 variable "engine_version" {
-  description = "Engine version for the Aurora PostgreSQL cluster."
+  description = "Aurora PostgreSQL engine version."
   type        = string
-  default     = "16.10"
+  default     = "15.3"
 }
 
 variable "instance_class" {
   description = "Instance class for cluster instances."
   type        = string
-  default     = "db.r5.large"
+  default     = "db.r6g.large"
 }
 
 variable "instance_count" {
-  description = "Number of instances (including writer)."
+  description = "Number of instances in the cluster."
   type        = number
   default     = 2
 }
 
-variable "vpc_security_group_ids" {
-  description = "List of existing VPC security group IDs for the cluster instances."
-  type        = list(string)
-  default     = []
-}
-
-variable "master_username" {
-  description = "Initial master username for the database."
-  type        = string
-  default     = "masteruser"
-}
-
 variable "database_name" {
-  description = "Initial database name to create."
+  description = "Initial database name."
   type        = string
-  default     = "postgres"
+  default     = "appdb"
 }
 
-variable "port" {
-  description = "Database port."
-  type        = number
-  default     = 5432
-}
-
-variable "create_kms_key" {
-  description = "Whether to create a new KMS CMK for encrypting the DB & secrets. If false, provide existing_kms_key_id."
-  type        = bool
-  default     = true
-}
-
-variable "existing_kms_key_id" {
-  description = "If not creating a new KMS key, supply an existing KMS key ID or ARN to use for encryption."
+variable "db_master_username" {
+  description = "Master username."
   type        = string
-  default     = ""
+  sensitive   = true
 }
 
-variable "use_secrets_manager" {
-  type        = bool
-  description = "Enable integration with AWS Secrets Manager for managing DB credentials"
-  default     = true
-}
-
-variable "existing_secret_arn" {
-  type        = string
-  description = "ARN of an existing Secrets Manager secret to use; leave empty to create or manage within the module"
-  default     = ""
-}
-
-variable "secret_rotation_enabled" {
-  type        = bool
-  description = "Enable secret rotation for the selected implementation (managed, existing, or module-managed)."
-  default     = true
-}
-
-variable "create_secretsmanager_vpc_endpoint" {
-  description = "Create an interface VPC endpoint for Secrets Manager to keep Secrets API traffic inside the VPC."
-  type        = bool
-  default     = true
-}
-
-variable "allowed_vpc_endpoint_source_security_group_ids" {
-  description = "Security group IDs that are allowed to connect to the Secrets Manager VPC endpoint on TCP/443 (e.g., rotation Lambda SG, app SG). Keep this minimal to follow least privilege."
-  type        = list(string)
-  default     = []
-}
-
-variable "allowed_vpc_endpoint_source_cidr_blocks" {
-  description = "CIDR blocks that can reach the Secrets Manager VPC endpoint on TCP/443 (optional). Keep empty unless explicitly needed."
-  type        = list(string)
-  default     = []
-}
-
-# Input variable to control creation of rotation Lambda
-variable "create_rotation_lambda" {
-  description = "If true, the module will deploy a rotation Lambda into your account using a provided S3 object (bucket/key)."
+variable "use_existing_kms_key" {
+  description = "Use an existing KMS key instead of creating one."
   type        = bool
   default     = false
 }
 
-variable "rotation_lambda_account" {
-  description = "AWS account where the AWS-managed rotation lambdas are hosted for constructing the default ARN. Override if needed."
+variable "existing_kms_key_arn" {
+  description = "ARN of existing KMS key."
   type        = string
-  # default     = "464417241295"
+  default     = null
 }
 
-variable "rotation_lambda_subnet_ids" {
-  description = "Subnets for the rotation Lambda VPC config. Required if create_rotation_lambda is true and you want Lambda in VPC (recommended)."
-  type        = list(string)
-  default     = []
+variable "kms_deletion_window_in_days" {
+  description = "Deletion window for the CMK."
+  type        = number
+  default     = 7
 }
 
-variable "rotation_lambda_environment" {
-  description = "Map of environment variables to set on the rotation Lambda (optional)."
-  type        = map(string)
-  default     = {}
-}
-
-variable "rotation_lambda_s3_bucket" {
-  description = "S3 bucket containing the rotation Lambda zip. Required if create_rotation_lambda is true."
+variable "secret_name" {
+  description = "Name of the Secrets Manager secret for master credentials."
   type        = string
-  default     = ""
+  default     = null
 }
 
-variable "rotation_lambda_s3_key" {
-  description = "S3 key for the rotation Lambda zip. Required if create_rotation_lambda is true."
-  type        = string
-  default     = ""
-}
-
-variable "rotation_lambda_s3_object_version" {
-  description = "Optional S3 object version for the rotation Lambda zip."
-  type        = string
-  default     = ""
-}
-
-variable "rotation_lambda_runtime" {
-  description = "Runtime for the rotation Lambda (e.g., python3.9)."
-  type        = string
-  default     = "python3.9"
-}
-
-variable "rotation_lambda_handler" {
-  description = "Handler for the rotation Lambda (e.g., lambda_function.lambda_handler)."
-  type        = string
-  default     = "lambda_function.lambda_handler"
-}
-
-# ARN of an existing Secrets Manager rotation Lambda (leave empty to use managed/module lambda)
-variable "existing_rotation_lambda_arn" {
-  type        = string
-  description = "ARN of an existing Secrets Manager rotation Lambda to use for secret rotation; if empty, use AWS-managed or module-managed Lambda."
-  default     = ""
-}
-
-# Input variable to control use of AWS-managed Secrets Manager rotation function
-variable "use_aws_managed_rotation" {
+variable "enable_auto_secrets_rotation" {
+  description = "Enable automatic rotation using AWS managed single-user Lambda."
   type        = bool
-  description = "Whether to use the AWS-managed Secrets Manager rotation Lambda when available."
   default     = true
 }
 
 variable "rotation_days" {
-  description = "How many days before Secrets Manager rotates credentials automatically."
+  description = "Automatic secrets rotation interval in days."
   type        = number
   default     = 180
 }
 
-variable "enable_error_log_export" {
-  description = "Enable CloudWatch error log export & metric filter."
-  type        = bool
-  default     = false
-}
-
-variable "enable_slow_log_export" {
-  description = "Enable CloudWatch slow query log export & metric filter."
-  type        = bool
-  default     = false
-}
-
-variable "log_retention_in_days" {
-  description = "Retention in days for the created CloudWatch Log Groups. 0 = never expire."
-  type        = number
-  default     = 1
-}
-
-variable "metric_namespace" {
-  description = "CloudWatch Metrics namespace for log-derived metrics."
+variable "rotation_lambda_zip" {
+  description = "Path to the ZIP file for rotation lambda code (AWS sample)."
   type        = string
-  default     = "RDS/Postgres"
+  default     = null
 }
 
-variable "enable_cloudwatch_alarms" {
-  description = "Create an example CloudWatch alarm for the error metric (optional)."
+variable "backup_retention_days" {
+  description = "Backup retention in days."
+  type        = number
+  default     = 7
+}
+
+variable "preferred_backup_window" {
+  description = "Backup window (UTC)."
+  type        = string
+  default     = "03:00-04:00"
+}
+
+variable "preferred_maintenance_window" {
+  description = "Maintenance window (UTC)."
+  type        = string
+  default     = "sun:03:00-sun:06:00"
+}
+
+variable "apply_immediately" {
+  description = "Apply changes immediately."
   type        = bool
   default     = false
 }
 
-variable "error_alarm_threshold" {
-  description = "Threshold for error alarm (number of errors) within evaluation period."
-  type        = number
-  default     = 1
+variable "deletion_protection" {
+  description = "Enable deletion protection."
+  type        = bool
+  default     = true
 }
 
-variable "error_alarm_evaluation_periods" {
-  description = "Evaluation periods for the error alarm."
+variable "allow_major_version_upgrade" {
+  description = "Allow major version upgrades."
+  type        = bool
+  default     = false
+}
+
+variable "publicly_accessible" {
+  description = "Whether instances are publicly accessible."
+  type        = bool
+  default     = false
+}
+
+variable "auto_minor_version_upgrade" {
+  description = "Enable auto minor version upgrade."
+  type        = bool
+  default     = true
+}
+
+variable "monitoring_interval" {
+  description = "Enhanced monitoring interval (seconds)."
   type        = number
-  default     = 1
+  default     = 0
+}
+
+variable "performance_insights_enabled" {
+  description = "Enable Performance Insights."
+  type        = bool
+  default     = true
+}
+
+variable "iam_database_authentication_enabled" {
+  description = "Enable IAM database authentication."
+  type        = bool
+  default     = false
+}
+
+variable "enable_error_logs" {
+  description = "Enable export of error logs to CloudWatch Logs."
+  type        = bool
+  default     = true
+}
+
+variable "enable_slow_query_logs" {
+  description = "Enable export of slow query logs to CloudWatch Logs."
+  type        = bool
+  default     = true
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch Logs retention in days."
+  type        = number
+  default     = 14
+}
+
+variable "cluster_parameter_family" {
+  description = "Parameter group family for Aurora PostgreSQL."
+  type        = string
+  default     = "aurora-postgresql15"
+}
+
+variable "additional_cluster_parameters" {
+  description = "Additional cluster parameters."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = []
+}
+
+variable "enable_metrics" {
+  description = "Enable default CloudWatch metrics/alarms."
+  type        = bool
+  default     = true
+}
+
+variable "cpu_high_threshold" {
+  description = "CPU high alarm threshold."
+  type        = number
+  default     = 80
+}
+
+variable "enable_slow_query_metrics" {
+  description = "Enable custom slow query metric filter and alarm."
+  type        = bool
+  default     = false
+}
+
+variable "slow_query_filter_pattern" {
+  description = "Logs Insights filter pattern to count slow queries."
+  type        = string
+  default     = "[timestamp, level=\"LOG\", message = /duration: [0-9\\.]+ ms/]"
+}
+
+variable "slow_query_threshold" {
+  description = "Threshold for slow queries count over period."
+  type        = number
+  default     = 100
+}
+
+variable "alarm_action_arns" {
+  description = "SNS topic ARNs to notify on alarm."
+  type        = list(string)
+  default     = []
+}
+
+variable "ok_action_arns" {
+  description = "SNS topic ARNs to notify when alarm recovers."
+  type        = list(string)
+  default     = []
 }
 
 variable "tags" {
@@ -241,4 +270,3 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
-
