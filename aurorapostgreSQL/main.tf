@@ -10,6 +10,51 @@ resource "random_password" "master" {
 resource "random_id" "id" {
   byte_length = var.byte_length
 }
+
+# Logging verbosity for statements: none | ddl | mod | all
+variable "log_statement" {
+  type        = string
+  description = "PostgreSQL log_statement level for the cluster."
+  default     = "none"
+  validation {
+    condition     = can(index(["none", "ddl", "mod", "all"], var.log_statement))
+    error_message = "log_statement must be one of: none, ddl, mod, all."
+  }
+}
+
+# Log queries slower than N ms; -1 disables (default). Must be a number.
+variable "log_min_duration_statement_ms" {
+  type        = number
+  description = "Minimum statement execution time in milliseconds to log; -1 disables logging."
+  default     = -1
+}
+
+# Log minimum error severity: debug5..fatal, or error/warning/notice
+variable "log_min_error_statement" {
+  type        = string
+  description = "Minimum error severity level to log (e.g., error, warning, notice, debug5..fatal)."
+  default     = "error"
+  validation {
+    condition = can(index([
+      "debug5", "debug4", "debug3", "debug2", "debug1",
+      "info", "notice", "warning", "error",
+      "log", "fatal", "panic"
+    ], var.log_min_error_statement))
+    error_message = "log_min_error_statement must be one of: debug5..debug1, info, notice, warning, error, log, fatal, panic."
+  }
+}
+
+# Error verbosity: default | verbose | terse
+variable "log_error_verbosity" {
+  type        = string
+  description = "PostgreSQL log_error_verbosity for error detail."
+  default     = "default"
+  validation {
+    condition     = can(index(["default", "verbose", "terse"], var.log_error_verbosity))
+    error_message = "log_error_verbosity must be one of: default, verbose, terse."
+  }
+}
+
 locals {
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
   cluster_identifier = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
@@ -27,35 +72,31 @@ resource "aws_kms_key" "this" {
   description             = "KMS CMK for Aurora PostgreSQL cluster ${local.cluster_identifier}"
   deletion_window_in_days = var.kms_deletion_window_in_days
   enable_key_rotation     = true
-  # Least privilege: Key policy allows account root and optional roles as needed for RDS, Secrets Manager
+
+  # Corrected key policy: use service principals, not account SLR ARNs
   policy = jsonencode({
     Version = "2012-10-17",
     Id      = "aurora-postgres-kms-policy",
     Statement = [
       {
-        Sid       = "EnableRootPermissions"
-        Effect    = "Allow"
-        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
-        Action    = "kms:*"
+        Sid       = "EnableRootPermissions",
+        Effect    = "Allow",
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" },
+        Action    = "kms:*",
         Resource  = "*"
       },
       {
-        Sid    = "AllowRDSUseOfTheKey"
-        Effect = "Allow"
-        Principal = {
-          AWS = [
-            "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
-            "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDSProxy"
-          ]
-        }
+        Sid       = "AllowRDSUseOfTheKey",
+        Effect    = "Allow",
+        Principal = { Service = "rds.amazonaws.com" },
         Action = [
           "kms:Encrypt",
           "kms:Decrypt",
           "kms:DescribeKey",
           "kms:GenerateDataKey",
           "kms:ReEncrypt*"
-        ]
-        Resource = "*"
+        ],
+        Resource = "*",
         Condition = {
           StringEquals = {
             "kms:ViaService" = "rds.${data.aws_region.current.region}.amazonaws.com"
@@ -63,19 +104,17 @@ resource "aws_kms_key" "this" {
         }
       },
       {
-        Sid    = "AllowSecretsManagerUseOfTheKey"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
+        Sid       = "AllowSecretsManagerUseOfTheKey",
+        Effect    = "Allow",
+        Principal = { Service = "secretsmanager.amazonaws.com" },
         Action = [
           "kms:Encrypt",
           "kms:Decrypt",
           "kms:DescribeKey",
           "kms:GenerateDataKey",
           "kms:ReEncrypt*"
-        ]
-        Resource = "*"
+        ],
+        Resource = "*",
         Condition = {
           StringEquals = {
             "kms:ViaService" = "secretsmanager.${data.aws_region.current.region}.amazonaws.com"
@@ -132,17 +171,43 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
-# Parameter group for enabling logging parameters for Aurora PostgreSQL
+# Parameter group for Aurora PostgreSQL
 resource "aws_rds_cluster_parameter_group" "this" {
   name        = "${local.cluster_identifier}-pg"
   family      = var.cluster_parameter_family
   description = "Aurora PostgreSQL parameter group for ${local.cluster_identifier}"
 
+  # Log statements: none | ddl | mod | all
+  parameter {
+    name  = "log_statement"
+    value = var.log_statement
+  }
+
+  # Log queries slower than N ms; -1 disables (default).
+  parameter {
+    name  = "log_min_duration_statement"
+    value = tostring(var.log_min_duration_statement_ms)
+  }
+
+  # Log minimum error severity: debug5..fatal, or error/warning/notice
+  parameter {
+    name  = "log_min_error_statement"
+    value = var.log_min_error_statement
+  }
+
+  # Error verbosity: default | verbose | terse
+  parameter {
+    name  = "log_error_verbosity"
+    value = var.log_error_verbosity
+  }
+
+  # Enable CloudWatch Logs export if requested
   parameter {
     name  = "rds.enable_log_types"
     value = join(",", local.log_types)
   }
 
+  # Additional custom parameters
   dynamic "parameter" {
     for_each = var.additional_cluster_parameters
     content {
@@ -155,7 +220,8 @@ resource "aws_rds_cluster_parameter_group" "this" {
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-cluster-params" })
 }
 
-# Cluster
+# Removed duplicate aws_rds_cluster_parameter_group using unsupported "parameters" attribute.
+# Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
   cluster_identifier                  = local.cluster_identifier
   engine                              = "aurora-postgresql"
@@ -165,7 +231,7 @@ resource "aws_rds_cluster" "this" {
   database_name                       = var.database_name
   port                                = var.port
   db_subnet_group_name                = aws_db_subnet_group.this.name
-  vpc_security_group_ids              = concat([aws_security_group.db.id], var.allowed_security_group_ids)
+  vpc_security_group_ids              = [aws_security_group.db.id]
   storage_encrypted                   = true
   kms_key_id                          = local.kms_key_arn
   backup_retention_period             = var.backup_retention_days
@@ -175,7 +241,7 @@ resource "aws_rds_cluster" "this" {
   deletion_protection                 = var.deletion_protection
   copy_tags_to_snapshot               = true
   allow_major_version_upgrade         = var.allow_major_version_upgrade
-  enabled_cloudwatch_logs_exports     = var.enable_error_logs || var.enable_slow_query_logs ? ["postgresql"] : []
+  enabled_cloudwatch_logs_exports     = (var.enable_error_logs || var.enable_slow_query_logs) ? ["postgresql"] : []
   iam_database_authentication_enabled = var.iam_database_authentication_enabled
   db_cluster_parameter_group_name     = aws_rds_cluster_parameter_group.this.name
   tags                                = merge(var.tags, { Name = local.cluster_identifier })
@@ -255,12 +321,12 @@ resource "aws_security_group_rule" "vpce_egress" {
 resource "aws_vpc_endpoint" "secretsmanager" {
   vpc_id = var.vpc_id
   # service_name        = data.aws_vpc_endpoint_service.secretsmanager.service_name
-  service_name        = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.vpc_endpoint_subnet_ids
-  security_group_ids  = [aws_security_group.vpce.id]
-  private_dns_enabled = true
-  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
+  service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = var.vpc_endpoint_subnet_ids
+  security_group_ids = [aws_security_group.vpce.id]
+  # private_dns_enabled = true
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
 }
 
 # IAM role used by Secrets Manager rotation function (least privilege)
