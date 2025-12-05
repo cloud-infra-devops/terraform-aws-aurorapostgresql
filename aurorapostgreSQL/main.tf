@@ -131,7 +131,7 @@ resource "aws_rds_cluster" "this" {
   storage_encrypted               = true
   kms_key_id                      = local.kms_key_id
   db_subnet_group_name            = aws_db_subnet_group.this.name
-  vpc_security_group_ids          = [aws_security_group.db_sec_grp.id] + var.vpc_security_group_ids
+  vpc_security_group_ids          = concat([aws_security_group.db_sec_grp.id], var.vpc_security_group_ids)
   enabled_cloudwatch_logs_exports = length(local.enabled_cloudwatch_logs_exports) > 0 ? local.enabled_cloudwatch_logs_exports : null
   skip_final_snapshot             = true
   tags                            = merge({ Name = var.name }, var.tags)
