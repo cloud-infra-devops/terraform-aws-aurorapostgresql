@@ -95,7 +95,7 @@ resource "aws_security_group" "db_sec_grp" {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
-    cidr_blocks = var.subnet_ids
+    cidr_blocks = [var.vpc_cidr]
   }
 
   # ingress {
@@ -148,12 +148,79 @@ resource "aws_rds_cluster_instance" "instances" {
   publicly_accessible = false
   tags                = merge({ Name = "${var.name}-instance-${count.index + 1}" }, var.tags)
 }
+locals {
+  # If you only want to test for a non-empty existing secret ARN:
+  existing_secret_provided = length(trimspace(var.existing_secret_arn)) > 0 ? true : false
+
+  # Example usage: choose existing secret ARN if provided, otherwise use the one created by this module
+  secret_arn_to_use = length(trimspace(var.existing_secret_arn)) > 0 ? var.existing_secret_arn : aws_secretsmanager_secret.db_secret.arn
+
+  # If module creates the rotation lambda, use that ARN; otherwise prefer an explicitly provided ARN
+  # Use coalesce + trimspace to safely handle empty string or null values (trimspace is single-arg)
+  rotation_lambda_final_arn = var.create_rotation_lambda ? aws_lambda_function.rotation_lambda[0].arn : (length(trimspace(coalesce(var.existing_rotation_lambda_arn, ""))) > 0 ? var.existing_rotation_lambda_arn : local.managed_rotation_lambda_arn)
+}
+
+# Remove any data "aws_prefix_list" lookup for Secrets Manager.
+# --- Secrets Manager endpoint SG egress (use supplied prefix list id if available) ---
+resource "aws_security_group_rule" "endpoint_egress_to_secretsmanager_prefix" {
+  count = var.create_secretsmanager_vpc_endpoint && length(trimspace(coalesce(var.secretsmanager_prefix_list_id, ""))) > 0 ? 1 : 0
+
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.secretsmanager_endpoint_sg[0].id
+
+  # Use the user-provided regional prefix list id to limit egress to the Secrets Manager service
+  prefix_list_ids = [var.secretsmanager_prefix_list_id]
+  description     = "Allow egress to AWS Secrets Manager via provided prefix list"
+}
+
+# Fallback egress rule when no prefix list id is provided. This is less restrictive:
+resource "aws_security_group_rule" "endpoint_egress_to_secretsmanager_fallback" {
+  count = var.create_secretsmanager_vpc_endpoint && length(trimspace(coalesce(var.secretsmanager_prefix_list_id, ""))) == 0 ? 1 : 0
+
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.secretsmanager_endpoint_sg[0].id
+
+  cidr_blocks = ["0.0.0.0/0"]
+  description = "Fallback: allow egress 443 to anywhere (no Secrets Manager prefix list provided). Replace with prefix-list id for least-privilege."
+}
+
+# --- Rotation Lambda SG egress to Secrets Manager: similar conditional approach ---
+resource "aws_security_group_rule" "rotation_lambda_egress_to_secretsmanager_prefix" {
+  count = var.create_rotation_lambda && length(trimspace(coalesce(var.secretsmanager_prefix_list_id, ""))) > 0 ? 1 : 0
+
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.rotation_lambda_sg[0].id
+
+  prefix_list_ids = [var.secretsmanager_prefix_list_id]
+  description     = "Allow rotation Lambda egress to Secrets Manager via provided prefix list"
+}
+
+resource "aws_security_group_rule" "rotation_lambda_egress_to_secretsmanager_fallback" {
+  count = var.create_rotation_lambda && length(trimspace(coalesce(var.secretsmanager_prefix_list_id, ""))) == 0 ? 1 : 0
+
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.rotation_lambda_sg[0].id
+
+  cidr_blocks = ["0.0.0.0/0"]
+  description = "Fallback: allow rotation Lambda egress 443 to anywhere (no Secrets Manager prefix list provided). Replace with prefix-list id for least-privilege."
+}
 
 # IAM role and policy for RDS to publish logs (optional if logs enabled)
 resource "aws_iam_role" "rds_cloudwatch_logs_role" {
   count = (var.enable_error_log_export || var.enable_slow_log_export) ? 1 : 0
-
-  name = "${var.name}-rds-cloudwatch-logs-role"
+  name  = "${var.name}-rds-cloudwatch-logs-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -187,8 +254,8 @@ resource "aws_iam_role_policy" "rds_cloudwatch_logs_policy" {
           "logs:PutLogEvents"
         ]
         Resource = [
-          var.enable_error_log_export ? aws_cloudwatch_log_group.errors[0].arn : "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/rds/cluster/${aws_rds_cluster.this.cluster_identifier}:*",
-          var.enable_slow_log_export ? aws_cloudwatch_log_group.slow_queries[0].arn : "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/rds/cluster/${aws_rds_cluster.this.cluster_identifier}:*"
+          var.enable_error_log_export ? aws_cloudwatch_log_group.errors[0].arn : "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/rds/cluster/${aws_rds_cluster.this.cluster_identifier}:*",
+          var.enable_slow_log_export ? aws_cloudwatch_log_group.slow_queries[0].arn : "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/rds/cluster/${aws_rds_cluster.this.cluster_identifier}:*"
         ]
       }
     ]
@@ -222,7 +289,7 @@ resource "aws_secretsmanager_secret_version" "initial" {
 
 # Construct default rotation lambda ARN if not provided and not creating rotation lambda in-module
 locals {
-  default_rotation_lambda_arn = var.existing_rotation_lambda_arn != "" ? var.existing_rotation_lambda_arn : "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.name}:${var.rotation_lambda_account}:function:SecretsManagerPostgreSQLRotationSingleUser"
+  default_rotation_lambda_arn = var.existing_rotation_lambda_arn != "" ? var.existing_rotation_lambda_arn : "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:${var.rotation_lambda_account}:function:SecretsManagerPostgreSQLRotationSingleUser"
   rotation_lambda_to_use      = var.create_rotation_lambda ? "" : (var.existing_rotation_lambda_arn != "" ? var.existing_rotation_lambda_arn : local.default_rotation_lambda_arn)
 }
 
@@ -295,7 +362,7 @@ resource "aws_vpc_endpoint" "secretsmanager" {
   count      = var.create_secretsmanager_vpc_endpoint ? 1 : 0
 
   vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = var.subnet_ids
   security_group_ids  = var.create_secretsmanager_vpc_endpoint ? [aws_security_group.secretsmanager_endpoint_sg[0].id] : []
@@ -346,8 +413,7 @@ resource "aws_security_group_rule" "rotation_lambda_egress_to_secretsmanager" {
 # IAM role for the rotation Lambda (least-privilege-ish - review & tighten)
 resource "aws_iam_role" "rotation_lambda_role" {
   count = var.create_rotation_lambda ? 1 : 0
-
-  name = "${var.name}-rotation-lambda-role"
+  name  = "${var.name}-rotation-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -369,9 +435,8 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
 # Inline policy with specific permissions for rotation actions (Secrets Manager + RDS describe + KMS decrypt if key exists)
 resource "aws_iam_role_policy" "rotation_lambda_inline" {
   count = var.create_rotation_lambda ? 1 : 0
-
-  name = "${var.name}-rotation-lambda-inline-policy"
-  role = aws_iam_role.rotation_lambda_role[0].id
+  name  = "${var.name}-rotation-lambda-inline-policy"
+  role  = aws_iam_role.rotation_lambda_role[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -456,10 +521,7 @@ resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
   # source_arn = local.secret_arn_used
 }
 
-# If rotation lambda created then use it as rotation lambda ARN
-locals {
-  rotation_lambda_final_arn = var.create_rotation_lambda ? aws_lambda_function.rotation_lambda[0].arn : (length(trim(var.existing_rotation_lambda_arn)) > 0 ? var.existing_rotation_lambda_arn : local.managed_rotation_lambda_arn)
-}
+# If rotation lambda created then use it as rotation lambda ARN (defined earlier in locals to avoid duplicate definition)
 
 # Secret rotation configuration (use created lambda ARN when present)
 resource "aws_secretsmanager_secret_rotation" "db_rotation" {
@@ -509,8 +571,8 @@ locals {
   ) : ""
 
   # Managed rotation lambda account & ARN for this region (if present in the map)
-  managed_rotation_account    = lookup(local.aws_rotation_accounts, data.aws_region.current.name, null)
-  managed_rotation_lambda_arn = local.managed_rotation_account != null ? "arn:aws:lambda:${data.aws_region.current.name}:${local.managed_rotation_account}:function:SecretsManagerRDSPostgreSQLRotationSingleUser" : null
+  managed_rotation_account    = lookup(local.aws_rotation_accounts, data.aws_region.current.region, null)
+  managed_rotation_lambda_arn = local.managed_rotation_account != null ? "arn:aws:lambda:${data.aws_region.current.region}:${local.managed_rotation_account}:function:SecretsManagerRDSPostgreSQLRotationSingleUser" : null
 
   # Conditions for choosing which rotation implementation to attach:
   use_managed_rotation      = var.secret_rotation_enabled && length(trim(var.existing_rotation_lambda_arn)) == 0 && var.use_aws_managed_rotation && local.managed_rotation_lambda_arn != null && length(local.secret_arn_used) > 0

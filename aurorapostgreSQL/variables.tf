@@ -2,7 +2,15 @@ variable "name" {
   description = "Base name for resources (prefix)."
   type        = string
 }
-
+variable "secretsmanager_prefix_list_id" {
+  description = "Optional regional EC2 managed prefix list id for AWS Secrets Manager (e.g. pl-0123456789abcdef0). If provided, endpoint and Lambda egress will be restricted to this prefix list. If empty, module will allow 0.0.0.0/0 egress as a fallback."
+  type        = string
+  default     = ""
+}
+variable "vpc_cidr" {
+  type    = string
+  default = "172.16.0.0/16"
+}
 variable "vpc_id" {
   description = "VPC id where DB, rotation lambda and Secrets Manager VPC endpoint will be created."
   type        = string
