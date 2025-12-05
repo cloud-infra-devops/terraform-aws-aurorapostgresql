@@ -13,19 +13,22 @@ data "aws_rds_engine_version" "aurora_pg_versions" {
   # parameter_group_family = "postgres15" # Example: for PostgreSQL 15
   latest = true # Set to true to get the latest available
 }
-# data "aws_rds_orderable_db_instance" "aurora_pg" {
-#   engine         = "aurora-postgresql"
-#   engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg.version
-#   # For clusters, RDS looks at instance classes; ensure the one you set is orderable with the version in your AZs.
-#   instance_class = var.instance_class
-#   license_model  = "postgresql-license"
-# }
-# Generate a secure initial master password (will be stored in Secrets Manager and used to configure the cluster)
-resource "random_password" "master" {
-  length           = 24
-  override_special = "!@#$%&*()-_=+[]{}<>?"
+
+# Generate password that excludes '/', '@', '\"', and space
+resource "random_password" "db_master" {
+  count            = var.db_master_password == null && var.generate_master_password ? 1 : 0
+  length           = var.generated_password_length
   special          = true
+  override_special = "!#$%&()*+,-.:;<=>?[\\]^_{|}~" # excludes / @ " and includes allowed specials
 }
+
+locals {
+  depends_on = [random_password.db_master]
+  effective_master_password = var.db_master_password != null ? var.db_master_password : (
+    var.generate_master_password ? random_password.db_master[0].result : null
+  )
+}
+
 # resource "random_id" "id" {
 #   byte_length = var.byte_length
 # }
@@ -160,8 +163,8 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
   name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
   retention_in_days = var.log_retention_days
-  # kms_key_id      = local.kms_key_arn  # remove/comment to avoid KMS access error
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
+  kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
+  tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
@@ -202,7 +205,7 @@ resource "aws_rds_cluster" "this" {
   engine                              = "aurora-postgresql"
   engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
   master_username                     = var.db_master_username
-  master_password                     = random_password.master.result
+  master_password                     = local.effective_master_password
   database_name                       = var.database_name
   port                                = var.port
   db_subnet_group_name                = aws_db_subnet_group.this.name
@@ -255,7 +258,7 @@ resource "aws_secretsmanager_secret_version" "db_master" {
   secret_id  = aws_secretsmanager_secret.db_master.id
   secret_string = jsonencode({
     username            = var.db_master_username
-    password            = random_password.master.result
+    password            = local.effective_master_password
     engine              = "postgres"
     host                = aws_rds_cluster.this.endpoint
     port                = var.port
@@ -421,53 +424,6 @@ resource "aws_security_group_rule" "lambda_security_group_ingress_rule" {
 #   byte_length = 2
 # }
 
-# locals {
-#   # region -> AWS account IDs that host the AWS-managed Secrets Manager rotation functions
-#   # This mapping is used to construct the ARN for the single-user RDS PostgreSQL rotation function:
-#   # SecretsManagerRDSPostgreSQLRotationSingleUser
-#   # Source: AWS Secrets Manager rotation function templates (AWS docs) / community references.
-#   aws_rotation_accounts = {
-#     "us-east-1"      = "297356227824"
-#     "us-east-2"      = "272243774136"
-#     "us-west-1"      = "074427151427"
-#     "us-west-2"      = "679388152427"
-#     "af-south-1"     = "837727923574"
-#     "ap-east-1"      = "568494199844"
-#     "ap-south-1"     = "980640731160"
-#     "ap-northeast-1" = "249141392436"
-#     "ap-northeast-2" = "819880672187"
-#     "ap-northeast-3" = "075579246818"
-#     "ap-southeast-1" = "718646579143"
-#     "ap-southeast-2" = "568782711913"
-#     "ca-central-1"   = "680589152509"
-#     "eu-central-1"   = "537616424511"
-#     "eu-west-1"      = "985815780053"
-#     "eu-west-2"      = "434816350285"
-#     "eu-west-3"      = "644151839549"
-#     "eu-north-1"     = "365925373257"
-#     "eu-south-1"     = "054676820928"
-#     "me-south-1"     = "772402452960"
-#     "sa-east-1"      = "856723963003"
-#   }
-# }
-
-# resource "aws_serverlessapplicationrepository_cloudformation_stack" "secrets_rotator" {
-#   name           = "Rotator-${random_id.id.hex}"
-#   application_id = "arn:aws:serverlessrepo:${data.aws_region.current.region}:${local.aws_rotation_accounts[data.aws_region.current.region]}:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
-#   # application_id = "arn:aws:serverlessrepo:${data.aws_region.current.region}:297356227824:applications/SecretsManagerRDSPostgreSQLRotationSingleUser"
-#   capabilities = [
-#     "CAPABILITY_IAM",
-#     "CAPABILITY_RESOURCE_POLICY",
-#   ]
-#   parameters = {
-#     functionName        = "LambdaRotator-${random_id.id.hex}"
-#     endpoint            = "https://secretsmanager.${data.aws_region.current.region}.${data.aws_partition.current.dns_suffix}"
-#     secretArn           = aws_secretsmanager_secret.db_master.arn
-#     vpcSubnetIds        = join(",", var.vpc_endpoint_subnet_ids)
-#     vpcSecurityGroupIds = aws_security_group.rotator_lambda_security_group.id
-#   }
-# }
-
 # If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
 # Rotation using AWS managed single-user rotation Lambda function
 resource "aws_secretsmanager_secret_rotation" "this" {
@@ -524,11 +480,10 @@ resource "aws_iam_role_policy" "lambda_vpc" {
 
 # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
 resource "aws_lambda_function" "rotation" {
-  function_name = "${local.cluster_identifier}-rotation"
-  role          = aws_iam_role.lambda_exec.arn
-  runtime       = "python3.12"
-  handler       = "lambda_function.lambda_handler"
-  # filename         = var.rotation_lambda_zip
+  function_name    = "${local.cluster_identifier}-rotation"
+  role             = aws_iam_role.lambda_exec.arn
+  runtime          = "python3.12"
+  handler          = "lambda_function.lambda_handler"
   filename         = data.archive_file.lambda_function_zip.output_path
   source_code_hash = filebase64sha256(data.archive_file.lambda_function_zip.output_path)
   timeout          = 900
