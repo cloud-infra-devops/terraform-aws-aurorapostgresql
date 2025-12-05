@@ -6,6 +6,13 @@ data "archive_file" "lambda_function_zip" {
   source_file = "${path.module}/lambda_function.py"
   output_path = "${path.module}/lambda_function.zip"
 }
+data "aws_rds_orderable_db_instance" "aurora_pg" {
+  engine         = "aurora-postgresql"
+  engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg.version
+  # For clusters, RDS looks at instance classes; ensure the one you set is orderable with the version in your AZs.
+  instance_class = var.instance_class
+  license_model  = "postgresql-license"
+}
 # Generate a secure initial master password (will be stored in Secrets Manager and used to configure the cluster)
 resource "random_password" "master" {
   length           = 24
@@ -146,8 +153,8 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
   name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
   retention_in_days = var.log_retention_days
-  kms_key_id        = local.kms_key_arn
-  tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
+  # kms_key_id      = local.kms_key_arn  # remove/comment to avoid KMS access error
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
@@ -186,7 +193,7 @@ resource "aws_rds_cluster" "this" {
   depends_on                          = [aws_secretsmanager_secret.db_master]
   cluster_identifier                  = local.cluster_identifier
   engine                              = "aurora-postgresql"
-  engine_version                      = var.engine_version
+  engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg.version
   master_username                     = var.db_master_username
   master_password                     = random_password.master.result
   database_name                       = var.database_name

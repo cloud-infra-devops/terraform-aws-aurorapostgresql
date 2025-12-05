@@ -55,12 +55,27 @@ variable "port" {
   default     = 5432
 }
 
+# variable "engine_version" {
+#   description = "Aurora PostgreSQL engine version."
+#   type        = string
+#   default     = "15.3"
+# }
 variable "engine_version" {
-  description = "Aurora PostgreSQL engine version."
+  description = "Aurora PostgreSQL engine version. If null, the module will auto-select a valid version for the region."
   type        = string
-  default     = "15.3"
+  default     = null
 }
 
+variable "preferred_engine_versions" {
+  description = "Ordered list of preferred Aurora PostgreSQL versions; the first available in the region will be used when engine_version is null."
+  type        = list(string)
+  default = [
+    "15.4",
+    "15.2",
+    "14.10",
+    "14.9"
+  ]
+}
 variable "instance_class" {
   description = "Instance class for cluster instances."
   type        = string
