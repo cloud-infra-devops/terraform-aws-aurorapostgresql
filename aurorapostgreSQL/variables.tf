@@ -118,7 +118,7 @@ variable "db_master_password" {
 variable "generate_master_password" {
   description = "If true and db_master_password is null, generate a compliant random password."
   type        = bool
-  default     = false
+  default     = true
 }
 variable "generated_password_length" {
   description = "Length of generated master password."

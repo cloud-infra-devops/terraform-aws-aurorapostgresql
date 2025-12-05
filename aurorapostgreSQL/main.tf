@@ -163,8 +163,8 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
   name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
   retention_in_days = var.log_retention_days
-  kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
-  tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
+  # kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
