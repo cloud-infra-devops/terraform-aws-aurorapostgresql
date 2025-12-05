@@ -5,5 +5,5 @@ variable "aws_region" {
 
 variable "aws_account_id" {
   type    = string
-  default = "value"
+  default = "211125325120"
 }
