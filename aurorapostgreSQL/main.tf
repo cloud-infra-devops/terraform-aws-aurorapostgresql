@@ -11,7 +11,7 @@ resource "random_id" "id" {
   byte_length = var.byte_length
 }
 locals {
-  depends_on         = [aws_kms_key.this, aws.secretsmanager_secret.db_master]
+  depends_on         = [aws_kms_key.this, aws_secretsmanager_secret.db_master]
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
   cluster_identifier = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
   # Secrets Manager name
@@ -179,6 +179,7 @@ resource "aws_rds_cluster_parameter_group" "this" {
 # Removed duplicate aws_rds_cluster_parameter_group using unsupported "parameters" attribute.
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
+  depends_on                          = [aws_secretsmanager_secret.db_master]
   cluster_identifier                  = local.cluster_identifier
   engine                              = "aurora-postgresql"
   engine_version                      = var.engine_version
@@ -205,6 +206,7 @@ resource "aws_rds_cluster" "this" {
 
 # Instances
 resource "aws_rds_cluster_instance" "this" {
+  depends_on                      = [aws_secretsmanager_secret.db_master, aws_rds_cluster.this]
   count                           = var.instance_count
   identifier                      = "${local.cluster_identifier}-${count.index}"
   cluster_identifier              = aws_rds_cluster.this.id
@@ -231,7 +233,7 @@ resource "aws_secretsmanager_secret" "db_master" {
 
 # Secret value
 resource "aws_secretsmanager_secret_version" "db_master" {
-  depends_on = [aws_rds_cluster.this, aws_secretsmanager_secret.db_master]
+  depends_on = [aws_secretsmanager_secret.db_master]
   secret_id  = aws_secretsmanager_secret.db_master.id
   secret_string = jsonencode({
     username            = var.db_master_username
