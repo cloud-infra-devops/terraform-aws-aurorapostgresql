@@ -208,7 +208,7 @@ variable "enable_slow_query_logs" {
 variable "log_retention_days" {
   description = "CloudWatch Logs retention in days."
   type        = number
-  default     = 14
+  default     = 1
 }
 
 variable "cluster_parameter_family" {
@@ -272,4 +272,48 @@ variable "tags" {
   description = "Tags to apply to resources."
   type        = map(string)
   default     = {}
+}
+
+# Logging verbosity for statements: none | ddl | mod | all
+variable "log_statement" {
+  type        = string
+  description = "PostgreSQL log_statement level for the cluster."
+  default     = "none"
+  validation {
+    condition     = can(index(["none", "ddl", "mod", "all"], var.log_statement))
+    error_message = "log_statement must be one of: none, ddl, mod, all."
+  }
+}
+
+# Log queries slower than N ms; -1 disables (default). Must be a number.
+variable "log_min_duration_statement_ms" {
+  type        = number
+  description = "Minimum statement execution time in milliseconds to log; -1 disables logging."
+  default     = -1
+}
+
+# Log minimum error severity: debug5..fatal, or error/warning/notice
+variable "log_min_error_statement" {
+  type        = string
+  description = "Minimum error severity level to log (e.g., error, warning, notice, debug5..fatal)."
+  default     = "error"
+  validation {
+    condition = can(index([
+      "debug5", "debug4", "debug3", "debug2", "debug1",
+      "info", "notice", "warning", "error",
+      "log", "fatal", "panic"
+    ], var.log_min_error_statement))
+    error_message = "log_min_error_statement must be one of: debug5..debug1, info, notice, warning, error, log, fatal, panic."
+  }
+}
+
+# Error verbosity: default | verbose | terse
+variable "log_error_verbosity" {
+  type        = string
+  description = "PostgreSQL log_error_verbosity for error detail."
+  default     = "default"
+  validation {
+    condition     = can(index(["default", "verbose", "terse"], var.log_error_verbosity))
+    error_message = "log_error_verbosity must be one of: default, verbose, terse."
+  }
 }
