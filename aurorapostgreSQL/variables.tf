@@ -99,6 +99,7 @@ variable "db_master_username" {
   type        = string
   sensitive   = true
 }
+
 variable "db_master_password" {
   description = "Master password. Must be 8-41 printable ASCII characters, excluding '/', '@', '\"', and space."
   type        = string
@@ -254,7 +255,7 @@ variable "log_retention_days" {
 variable "cluster_parameter_family" {
   description = "Parameter group family for Aurora PostgreSQL."
   type        = string
-  default     = "aurora-postgresql15"
+  default     = "aurora-postgresql17"
 }
 
 variable "additional_cluster_parameters" {
