@@ -89,7 +89,8 @@ resource "aws_db_subnet_group" "this" {
 # DB Security group
 resource "aws_security_group" "db_sec_grp" {
   name   = "${var.name}-AuroraPostgreSQL-sg"
-  vpc_id = aws_vpc.aws-secrets-manager-vpc.id
+  vpc_id = var.vpc_id
+  tags   = merge({ Name = "${var.name}-AuroraPostgreSQL-sg" }, var.tags)
   ingress {
     from_port   = 5432
     to_port     = 5432
