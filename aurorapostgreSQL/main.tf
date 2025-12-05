@@ -11,7 +11,7 @@ resource "random_id" "id" {
   byte_length = var.byte_length
 }
 locals {
-  depends_on         = [aws_kms_key.this, aws]
+  depends_on         = [aws_kms_key.this, aws.secretsmanager_secret.db_master]
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
   cluster_identifier = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
   # Secrets Manager name
