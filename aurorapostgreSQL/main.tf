@@ -248,9 +248,9 @@ resource "aws_security_group_rule" "vpce_egress" {
   security_group_id = aws_security_group.vpce.id
 }
 
-data "aws_vpc_endpoint_service" "secretsmanager" {
-  service = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
-}
+# data "aws_vpc_endpoint_service" "secretsmanager" {
+#   service = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
+# }
 
 resource "aws_vpc_endpoint" "secretsmanager" {
   vpc_id = var.vpc_id
