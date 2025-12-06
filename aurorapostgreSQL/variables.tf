@@ -196,7 +196,7 @@ variable "apply_immediately" {
 variable "deletion_protection" {
   description = "Enable deletion protection."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "allow_major_version_upgrade" {
