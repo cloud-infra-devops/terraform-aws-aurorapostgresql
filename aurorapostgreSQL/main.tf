@@ -203,7 +203,7 @@ resource "aws_rds_cluster" "this" {
   database_name                = var.database_name
   port                         = var.port
   db_subnet_group_name         = aws_db_subnet_group.this.name
-  vpc_security_group_ids       = [aws_security_group.db.id]
+  vpc_security_group_ids       = concat([aws_security_group.db.id], var.allowed_security_group_ids)
   storage_encrypted            = true
   kms_key_id                   = local.kms_key_arn
   backup_retention_period      = var.backup_retention_days
