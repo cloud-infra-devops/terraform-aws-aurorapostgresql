@@ -253,11 +253,11 @@ variable "log_retention_days" {
   default     = 1
 }
 
-variable "cluster_parameter_family" {
-  description = "Parameter group family for Aurora PostgreSQL."
-  type        = string
-  default     = "aurora-postgresql17"
-}
+# variable "cluster_parameter_family" {
+#   description = "Parameter group family for Aurora PostgreSQL."
+#   type        = string
+#   default     = "aurora-postgresql17"
+# }
 
 variable "additional_cluster_parameters" {
   description = "Additional cluster parameters."
