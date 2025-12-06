@@ -124,6 +124,16 @@ resource "aws_kms_key" "this" {
             "kms:ViaService" = "logs.${data.aws_region.current.region}.amazonaws.com"
           }
         }
+      },
+      {
+        Sid       = "AllowLambdaUseOfTheKey",
+        Effect    = "Allow",
+        Principal = { Service = "lambda.amazonaws.com" },
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ],
+        Resource = "*"
       }
     ]
   })
@@ -166,38 +176,6 @@ resource "aws_security_group" "db" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
-
-# Inbound rules for the DB SG (principle of least privilege: only provided CIDRs/SGs)
-# resource "aws_security_group_rule" "db_ingress_sg" {
-#   count                    = length(var.allowed_other_ingress_cidrs)
-#   type                     = "ingress"
-#   from_port                = var.port
-#   to_port                  = var.port
-#   protocol                 = "tcp"
-#   cidr_blocks              = concat([var.vpc_cidr], [var.allowed_other_ingress_cidrs[count.index]]) # also allow VPC CIDR
-#   source_security_group_id = var.allowed_existing_security_group_ids[count.index]
-#   security_group_id        = aws_security_group.db.id
-# }
-
-# resource "aws_security_group_rule" "db_ingress_sg" {
-#   count       = length(var.allowed_security_group_ids)
-#   type        = "ingress"
-#   from_port   = var.port
-#   to_port     = var.port
-#   protocol    = "tcp"
-#   cidr_blocks = concat([var.vpc_cidr], [var.allowed_cidr_blocks[count.index]]) # also allow VPC CIDR
-#   # source_security_group_id = var.allowed_security_group_ids[count.index]
-#   security_group_id = aws_security_group.db.id
-# }
-
-# resource "aws_security_group_rule" "db_egress_sg" {
-#   type              = "egress"
-#   from_port         = 0
-#   to_port           = 0
-#   protocol          = "-1"
-#   cidr_blocks       = ["0.0.0.0/0"]
-#   security_group_id = aws_security_group.db.id
-# }
 
 # Subnet group
 resource "aws_db_subnet_group" "this" {
@@ -503,6 +481,15 @@ resource "aws_iam_role_policy" "lambda_vpc" {
           "ec2:DeleteNetworkInterface"
         ],
         Resource = "*"
+      },
+      {
+        Sid    = "AllowLambdaKMSDecryption",
+        Effect = "Allow",
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ],
+        Resource = local.kms_key_arn
       }
     ]
   })
@@ -523,6 +510,7 @@ resource "aws_lambda_function" "rotation" {
   source_code_hash = filebase64sha256(data.archive_file.lambda_function_zip.output_path)
   timeout          = 900
   memory_size      = 256
+  kms_key_arn      = local.kms_key_arn
 
   dynamic "vpc_config" {
     for_each = local.lambda_has_vpc ? [1] : []
