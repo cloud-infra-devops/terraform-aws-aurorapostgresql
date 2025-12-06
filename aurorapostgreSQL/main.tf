@@ -39,9 +39,7 @@ locals {
 # resource "random_id" "index" {
 #   byte_length = 2
 # }
-# resource "random_id" "id" {
-#   byte_length = var.byte_length
-# }
+
 locals {
   depends_on         = [aws_kms_key.this, aws_secretsmanager_secret.db_master]
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
