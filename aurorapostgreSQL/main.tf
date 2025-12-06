@@ -136,18 +136,48 @@ resource "aws_security_group" "db" {
   description = "Security group for Aurora PostgreSQL cluster"
   vpc_id      = var.vpc_id
   tags        = merge(var.tags, { Name = "${local.cluster_identifier}-db-sg" })
+
+  dynamic "ingress" {
+    for_each = distinct(compact(var.allowed_other_ingress_cidrs))
+    content {
+      description = "DB access from allowed other ingress CIDRs-(${ingress.value})"
+      from_port   = var.port
+      to_port     = var.port
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = distinct(compact(var.allowed_existing_security_group_ids))
+    content {
+      description     = "DB access from allowed existing SG-(${ingress.value})"
+      from_port       = var.port
+      to_port         = var.port
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 }
 
 # Inbound rules for the DB SG (principle of least privilege: only provided CIDRs/SGs)
-resource "aws_security_group_rule" "db_ingress_sg" {
-  count             = length(var.allowed_other_ingress_cidrs)
-  type              = "ingress"
-  from_port         = var.port
-  to_port           = var.port
-  protocol          = "tcp"
-  cidr_blocks       = concat([var.vpc_cidr], [var.allowed_other_ingress_cidrs[count.index]]) # also allow VPC CIDR
-  security_group_id = aws_security_group.db.id
-}
+# resource "aws_security_group_rule" "db_ingress_sg" {
+#   count                    = length(var.allowed_other_ingress_cidrs)
+#   type                     = "ingress"
+#   from_port                = var.port
+#   to_port                  = var.port
+#   protocol                 = "tcp"
+#   cidr_blocks              = concat([var.vpc_cidr], [var.allowed_other_ingress_cidrs[count.index]]) # also allow VPC CIDR
+#   source_security_group_id = var.allowed_existing_security_group_ids[count.index]
+#   security_group_id        = aws_security_group.db.id
+# }
 
 # resource "aws_security_group_rule" "db_ingress_sg" {
 #   count       = length(var.allowed_security_group_ids)
@@ -160,14 +190,14 @@ resource "aws_security_group_rule" "db_ingress_sg" {
 #   security_group_id = aws_security_group.db.id
 # }
 
-resource "aws_security_group_rule" "db_egress_sg" {
-  type              = "egress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.db.id
-}
+# resource "aws_security_group_rule" "db_egress_sg" {
+#   type              = "egress"
+#   from_port         = 0
+#   to_port           = 0
+#   protocol          = "-1"
+#   cidr_blocks       = ["0.0.0.0/0"]
+#   security_group_id = aws_security_group.db.id
+# }
 
 # Subnet group
 resource "aws_db_subnet_group" "this" {
@@ -278,6 +308,7 @@ resource "aws_secretsmanager_secret_version" "db_master" {
 
 # VPC endpoint for Secrets Manager to keep rotation traffic inside VPC
 resource "aws_security_group" "vpce" {
+  depends_on  = [aws_security_group.db]
   name        = "${local.cluster_identifier}-secretsmanager-vpce-sg"
   description = "SG for Secrets Manager VPC endpoint interface"
   vpc_id      = var.vpc_id

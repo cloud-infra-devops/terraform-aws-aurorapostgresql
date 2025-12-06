@@ -178,13 +178,13 @@ variable "generated_password_length" {
 variable "use_existing_kms_key" {
   description = "Use an existing KMS key instead of creating one."
   type        = bool
-  default     = false
+  # default     = false
 }
 
 variable "existing_kms_key_arn" {
   description = "ARN of existing KMS key."
   type        = string
-  default     = null
+  # default     = null
 }
 
 variable "kms_deletion_window_in_days" {

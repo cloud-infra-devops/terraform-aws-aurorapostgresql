@@ -32,8 +32,10 @@ module "aurora_postgres_cluster" {
   vpc_endpoint_subnet_ids             = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
   db_master_username                  = "postgreSQLdbAdmin"
   enable_auto_secrets_rotation        = true
+  use_existing_kms_key                = false
+  existing_kms_key_arn                = []
   tags = {
-    Environment = "prod"
+    Environment = "sbx"
     Owner       = "cloud-infra-devops"
   }
 }
