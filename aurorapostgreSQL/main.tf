@@ -36,9 +36,9 @@ locals {
   )
 }
 
-# resource "random_id" "index" {
-#   byte_length = 2
-# }
+resource "random_id" "index" {
+  byte_length = 2
+}
 
 locals {
   depends_on         = [aws_kms_key.this, aws_secretsmanager_secret.db_master]
@@ -245,10 +245,10 @@ resource "aws_rds_cluster_instance" "this" {
 
 # Secrets Manager secret for DB master credentials (encrypted with KMS)
 resource "aws_secretsmanager_secret" "db_master" {
-  name        = local.secret_name
+  name        = "${local.secret_name}-${random_id.index.hex}"
   description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
   kms_key_id  = local.kms_key_arn
-  tags        = merge(var.tags, { Name = "${local.secret_name}" })
+  tags        = merge(var.tags, { Name = "${local.secret_name}-${random_id.index.hex}" })
 }
 
 # Secret value
