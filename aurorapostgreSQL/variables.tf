@@ -68,7 +68,7 @@ variable "engine_version" {
 variable "preferred_engine_versions" {
   description = "Ordered list of preferred Aurora PostgreSQL versions; first available in region is used when engine_version is null."
   type        = list(string)
-  default     = ["17.2", "17.1", "17.0", "15.4", "15.3"]
+  default     = ["17.7", "17.6", "17.5", "17.4", "17.3", "17.2", "17.1", "17.0", "15.4", "15.3"]
 }
 
 # Remove hard-coded cluster_parameter_family default to avoid mismatches
