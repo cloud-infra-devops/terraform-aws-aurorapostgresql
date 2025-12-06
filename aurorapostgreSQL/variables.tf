@@ -48,7 +48,11 @@ variable "allowed_security_group_ids" {
   type        = list(string)
   default     = []
 }
-
+variable "lambda_security_group_ids" {
+  description = "Security group IDs for the rotation Lambda when placed in VPC. Must be non-empty when lambda_subnet_ids is non-empty."
+  type        = list(string)
+  default     = []
+}
 variable "port" {
   description = "PostgreSQL port."
   type        = number

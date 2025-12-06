@@ -478,8 +478,13 @@ resource "aws_iam_role_policy" "lambda_vpc" {
   })
 }
 
+locals {
+  lambda_has_vpc = length(var.lambda_subnet_ids) > 0 && length(var.lambda_security_group_ids) > 0
+}
+
 # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
 resource "aws_lambda_function" "rotation" {
+  depends_on       = [aws_vpc_endpoint.secretsmanager]
   function_name    = "${local.cluster_identifier}-rotation"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
@@ -489,9 +494,12 @@ resource "aws_lambda_function" "rotation" {
   timeout          = 900
   memory_size      = 256
 
-  vpc_config {
-    subnet_ids         = var.lambda_subnet_ids
-    security_group_ids = [aws_security_group.db.id]
+  dynamic "vpc_config" {
+    for_each = local.lambda_has_vpc ? [1] : []
+    content {
+      subnet_ids         = var.lambda_subnet_ids
+      security_group_ids = var.lambda_security_group_ids
+    }
   }
 
   environment {
@@ -500,12 +508,9 @@ resource "aws_lambda_function" "rotation" {
       RDS_CLUSTER_ARN = aws_rds_cluster.this.arn
       KMS_KEY_ARN     = local.kms_key_arn
       DB_ENGINE       = "postgres"
-      VPC_ENDPOINT_SM = aws_vpc_endpoint.secretsmanager.id
     }
   }
-
-  depends_on = [aws_vpc_endpoint.secretsmanager]
-  tags       = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
 }
 
 # Resource policy for the secret limiting access to rotation role and account root
