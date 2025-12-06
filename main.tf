@@ -21,8 +21,7 @@ provider "aws" {
 }
 
 module "aurora_postgres_cluster" {
-  source = "./aurorapostgreSQL"
-
+  source                              = "./aurorapostgreSQL"
   name                                = "duke-app"
   vpc_id                              = "vpc-07b3e9e8021bfb088"
   vpc_cidr                            = "172.16.0.0/16"
