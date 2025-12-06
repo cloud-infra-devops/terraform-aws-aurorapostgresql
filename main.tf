@@ -33,7 +33,7 @@ module "aurora_postgres_cluster" {
   db_master_username                  = "postgreSQLdbAdmin"
   enable_auto_secrets_rotation        = true
   use_existing_kms_key                = false
-  existing_kms_key_arn                = []
+  existing_kms_key_arn                = null
   tags = {
     Environment = "sbx"
     Owner       = "cloud-infra-devops"
