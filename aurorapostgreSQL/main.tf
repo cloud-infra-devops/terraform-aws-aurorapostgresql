@@ -7,13 +7,24 @@ data "archive_file" "lambda_function_zip" {
   output_path = "${path.module}/lambda_function.zip"
 }
 data "aws_rds_engine_version" "aurora_pg_versions" {
-  engine = "aurora-postgresql"
+  engine             = "aurora-postgresql"
+  preferred_versions = var.preferred_engine_versions # e.g., ["17.2", "17.1", "17.0", "15.4", "15.3"]
   # Use this to filter for the latest minor version within a major version
   # parameter_group_family = "postgres14" # Example: for PostgreSQL 14
   # parameter_group_family = "postgres15" # Example: for PostgreSQL 15
   latest = true # Set to true to get the latest available
 }
-
+# # Pick a valid Aurora PostgreSQL version for the region
+# data "aws_rds_engine_version" "aurora_pg" {
+#   engine             = "aurora-postgresql"
+#   preferred_versions = var.preferred_engine_versions # e.g., ["17.2", "17.1", "17.0", "15.4", "15.3"]
+# }
+locals {
+  selected_engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
+  # Derive the parameter group family from the selected engine version (major component)
+  selected_major                     = split(".", local.selected_engine_version)[0]
+  cluster_parameter_family_effective = "aurora-postgresql${local.selected_major}"
+}
 # Generate password that excludes '/', '@', '\"', and space
 resource "random_password" "db_master" {
   count            = var.db_master_password == null && var.generate_master_password ? 1 : 0
@@ -169,41 +180,28 @@ resource "aws_cloudwatch_log_group" "postgresql" {
 
 resource "aws_rds_cluster_parameter_group" "this" {
   name        = "${local.cluster_identifier}-pg"
-  family      = var.cluster_parameter_family
+  family      = local.cluster_parameter_family_effective
   description = "Aurora PostgreSQL parameter group for ${local.cluster_identifier}"
-
   # parameters = concat(
   #   [
-  #     {
-  #       name  = "log_statement"
-  #       value = var.log_statement
-  #     },
-  #     {
-  #       name  = "log_min_duration_statement"
-  #       value = tostring(var.log_min_duration_statement_ms)
-  #     },
-  #     {
-  #       name  = "log_min_error_statement"
-  #       value = var.log_min_error_statement
-  #     },
-  #     {
-  #       name  = "log_error_verbosity"
-  #       value = var.log_error_verbosity
-  #     }
+  #     { name = "log_statement", value = var.log_statement },
+  #     { name = "log_min_duration_statement", value = tostring(var.log_min_duration_statement_ms) },
+  #     { name = "log_min_error_statement", value = var.log_min_error_statement },
+  #     { name = "log_error_verbosity", value = var.log_error_verbosity }
   #   ],
   #   var.additional_cluster_parameters
   # )
-
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-cluster-params" })
 }
 
 # Removed duplicate aws_rds_cluster_parameter_group using unsupported "parameters" attribute.
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
-  depends_on                          = [aws_secretsmanager_secret.db_master]
-  cluster_identifier                  = local.cluster_identifier
-  engine                              = "aurora-postgresql"
-  engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
+  depends_on         = [aws_secretsmanager_secret.db_master]
+  cluster_identifier = local.cluster_identifier
+  engine             = "aurora-postgresql"
+  engine_version     = local.selected_engine_version
+  # engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
   master_username                     = var.db_master_username
   master_password                     = local.effective_master_password
   database_name                       = var.database_name
@@ -501,7 +499,6 @@ resource "aws_lambda_function" "rotation" {
       security_group_ids = var.lambda_security_group_ids
     }
   }
-
   environment {
     variables = {
       SECRET_ARN      = aws_secretsmanager_secret.db_master.arn
@@ -511,6 +508,15 @@ resource "aws_lambda_function" "rotation" {
     }
   }
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
+}
+
+# Allow Secrets Manager to invoke the rotation Lambda for this secret
+resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
+  statement_id  = "AllowSecretsManagerInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.rotation.function_name
+  principal     = "secretsmanager.amazonaws.com"
+  source_arn    = aws_secretsmanager_secret.db_master.arn
 }
 
 # Resource policy for the secret limiting access to rotation role and account root

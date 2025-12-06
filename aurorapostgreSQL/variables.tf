@@ -59,26 +59,23 @@ variable "port" {
   default     = 5432
 }
 
-# variable "engine_version" {
-#   description = "Aurora PostgreSQL engine version."
-#   type        = string
-#   default     = "15.3"
-# }
 variable "engine_version" {
-  description = "Aurora PostgreSQL engine version. If null, the module will auto-select a valid version for the region."
+  description = "Aurora PostgreSQL engine version; if null, a valid version is auto-selected for the region."
   type        = string
   default     = null
 }
 
 variable "preferred_engine_versions" {
-  description = "Ordered list of preferred Aurora PostgreSQL versions; the first available in the region will be used when engine_version is null."
+  description = "Ordered list of preferred Aurora PostgreSQL versions; first available in region is used when engine_version is null."
   type        = list(string)
-  default = [
-    "15.4",
-    "15.2",
-    "14.10",
-    "14.9"
-  ]
+  default     = ["17.2", "17.1", "17.0", "15.4", "15.3"]
+}
+
+# Remove hard-coded cluster_parameter_family default to avoid mismatches
+variable "cluster_parameter_family" {
+  description = "Deprecated: parameter group family. The module derives the correct family from the selected engine version."
+  type        = string
+  default     = null
 }
 variable "instance_class" {
   description = "Instance class for cluster instances."
