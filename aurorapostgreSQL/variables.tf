@@ -37,16 +37,16 @@ variable "lambda_subnet_ids" {
   default     = []
 }
 
-variable "allowed_cidr_blocks" {
-  description = "CIDR blocks allowed to connect to the DB port."
+variable "allowed_other_ingress_cidrs" {
+  description = "other ingress CIDR blocks allowed to connect to the Aurora DB"
   type        = list(string)
-  default     = []
+  # default     = []
 }
 
-variable "allowed_security_group_ids" {
+variable "allowed_existing_security_group_ids" {
   description = "Existing Security group IDs allowed to connect to the DB port."
   type        = list(string)
-  default     = []
+  # default     = []
 }
 variable "lambda_security_group_ids" {
   description = "Security group IDs for the rotation Lambda when placed in VPC. Must be non-empty when lambda_subnet_ids is non-empty."
@@ -77,10 +77,58 @@ variable "cluster_parameter_family" {
   type        = string
   default     = null
 }
+# Allowed Aurora PostgreSQL instance classes (provisioned instances for Aurora PostgreSQL)
+# Note: Serverless v2 uses capacity settings, not instance_class. Use these when provisioning instances.
+variable "allowed_instance_classes" {
+  description = "List of allowed Aurora PostgreSQL instance classes."
+  type        = list(string)
+  default = [
+    # Graviton (recommended for cost/perf)
+    "db.r6g.large",
+    "db.r6g.xlarge",
+    "db.r6g.2xlarge",
+    "db.r6g.4xlarge",
+    "db.r6g.8xlarge",
+    "db.r6g.12xlarge",
+    "db.r6g.16xlarge",
+
+    "db.r7g.large",
+    "db.r7g.xlarge",
+    "db.r7g.2xlarge",
+    "db.r7g.4xlarge",
+    "db.r7g.8xlarge",
+    "db.r7g.12xlarge",
+    "db.r7g.16xlarge",
+
+    # Intel-based (legacy)
+    "db.r5.large",
+    "db.r5.xlarge",
+    "db.r5.2xlarge",
+    "db.r5.4xlarge",
+    "db.r5.8xlarge",
+    "db.r5.12xlarge",
+    "db.r5.16xlarge",
+    "db.r5.24xlarge",
+
+    "db.r6i.large",
+    "db.r6i.xlarge",
+    "db.r6i.2xlarge",
+    "db.r6i.4xlarge",
+    "db.r6i.8xlarge",
+    "db.r6i.12xlarge",
+    "db.r6i.16xlarge",
+    "db.r6i.24xlarge",
+    "db.r6i.32xlarge"
+  ]
+}
 variable "instance_class" {
   description = "Instance class for cluster instances."
   type        = string
   default     = "db.r6g.large"
+  validation {
+    condition     = contains(var.allowed_instance_classes, var.instance_class)
+    error_message = "Invalid instance_class. Must be one of allowed_instance_classes. Consider a Graviton class such as db.r6g.large or db.r7g.large."
+  }
 }
 
 variable "instance_count" {
@@ -154,7 +202,7 @@ variable "secret_name" {
 variable "enable_auto_secrets_rotation" {
   description = "Enable automatic rotation using AWS managed single-user Lambda."
   type        = bool
-  default     = true
+  # default     = true
 }
 
 variable "rotation_days" {
@@ -163,11 +211,11 @@ variable "rotation_days" {
   default     = 180
 }
 
-variable "rotation_lambda_zip" {
-  description = "Path to the ZIP file for rotation lambda code (AWS sample)."
-  type        = string
-  default     = null
-}
+# variable "rotation_lambda_zip" {
+#   description = "Path to the ZIP file for rotation lambda code (AWS sample)."
+#   type        = string
+#   default     = null
+# }
 
 variable "backup_retention_days" {
   description = "Backup retention in days."

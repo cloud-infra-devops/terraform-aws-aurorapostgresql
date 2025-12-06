@@ -139,24 +139,34 @@ resource "aws_security_group" "db" {
 }
 
 # Inbound rules for the DB SG (principle of least privilege: only provided CIDRs/SGs)
-resource "aws_security_group_rule" "db_ingress_cidrs" {
-  count             = length(var.allowed_cidr_blocks)
+resource "aws_security_group_rule" "db_ingress_sg" {
+  count             = length(var.allowed_other_ingress_cidrs)
   type              = "ingress"
   from_port         = var.port
   to_port           = var.port
   protocol          = "tcp"
-  cidr_blocks       = [var.allowed_cidr_blocks[count.index]]
+  cidr_blocks       = concat([var.vpc_cidr], [var.allowed_other_ingress_cidrs[count.index]]) # also allow VPC CIDR
   security_group_id = aws_security_group.db.id
 }
 
-resource "aws_security_group_rule" "db_ingress_sg" {
-  count                    = length(var.allowed_security_group_ids)
-  type                     = "ingress"
-  from_port                = var.port
-  to_port                  = var.port
-  protocol                 = "tcp"
-  source_security_group_id = var.allowed_security_group_ids[count.index]
-  security_group_id        = aws_security_group.db.id
+# resource "aws_security_group_rule" "db_ingress_sg" {
+#   count       = length(var.allowed_security_group_ids)
+#   type        = "ingress"
+#   from_port   = var.port
+#   to_port     = var.port
+#   protocol    = "tcp"
+#   cidr_blocks = concat([var.vpc_cidr], [var.allowed_cidr_blocks[count.index]]) # also allow VPC CIDR
+#   # source_security_group_id = var.allowed_security_group_ids[count.index]
+#   security_group_id = aws_security_group.db.id
+# }
+
+resource "aws_security_group_rule" "db_egress_sg" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.db.id
 }
 
 # Subnet group
@@ -203,7 +213,7 @@ resource "aws_rds_cluster" "this" {
   database_name                = var.database_name
   port                         = var.port
   db_subnet_group_name         = aws_db_subnet_group.this.name
-  vpc_security_group_ids       = concat([aws_security_group.db.id], var.allowed_security_group_ids)
+  vpc_security_group_ids       = concat([aws_security_group.db.id], var.allowed_existing_security_group_ids)
   storage_encrypted            = true
   kms_key_id                   = local.kms_key_arn
   backup_retention_period      = var.backup_retention_days
@@ -398,8 +408,8 @@ resource "aws_security_group_rule" "lambda_security_group_egress_rule1" {
 
 resource "aws_security_group_rule" "lambda_security_group_egress_rule2" {
   type              = "egress"
-  from_port         = 5432
-  to_port           = 5432
+  from_port         = var.port
+  to_port           = var.port
   protocol          = "tcp"
   cidr_blocks       = [var.vpc_cidr]
   security_group_id = aws_security_group.rotator_lambda_security_group.id
