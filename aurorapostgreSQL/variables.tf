@@ -268,6 +268,17 @@ variable "additional_cluster_parameters" {
   default = []
 }
 
+variable "skip_final_snapshot" {
+  description = "Skip taking a final snapshot on cluster deletion. Set to false in production."
+  type        = bool
+  default     = true
+}
+
+variable "final_snapshot_identifier" {
+  description = "Identifier for the final snapshot when skip_final_snapshot is false."
+  type        = string
+  default     = null
+}
 variable "enable_metrics" {
   description = "Enable default CloudWatch metrics/alarms."
   type        = bool

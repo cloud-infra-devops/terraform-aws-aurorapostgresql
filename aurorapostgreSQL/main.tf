@@ -14,11 +14,7 @@ data "aws_rds_engine_version" "aurora_pg_versions" {
   # parameter_group_family = "postgres15" # Example: for PostgreSQL 15
   latest = true # Set to true to get the latest available
 }
-# # Pick a valid Aurora PostgreSQL version for the region
-# data "aws_rds_engine_version" "aurora_pg" {
-#   engine             = "aurora-postgresql"
-#   preferred_versions = var.preferred_engine_versions # e.g., ["17.2", "17.1", "17.0", "15.4", "15.3"]
-# }
+
 locals {
   selected_engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
   # Derive the parameter group family from the selected engine version (major component)
@@ -40,6 +36,9 @@ locals {
   )
 }
 
+# resource "random_id" "index" {
+#   byte_length = 2
+# }
 # resource "random_id" "id" {
 #   byte_length = var.byte_length
 # }
@@ -197,22 +196,26 @@ resource "aws_rds_cluster_parameter_group" "this" {
 # Removed duplicate aws_rds_cluster_parameter_group using unsupported "parameters" attribute.
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
-  depends_on         = [aws_secretsmanager_secret.db_master]
-  cluster_identifier = local.cluster_identifier
-  engine             = "aurora-postgresql"
-  engine_version     = local.selected_engine_version
-  # engine_version                      = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
-  master_username                     = var.db_master_username
-  master_password                     = local.effective_master_password
-  database_name                       = var.database_name
-  port                                = var.port
-  db_subnet_group_name                = aws_db_subnet_group.this.name
-  vpc_security_group_ids              = [aws_security_group.db.id]
-  storage_encrypted                   = true
-  kms_key_id                          = local.kms_key_arn
-  backup_retention_period             = var.backup_retention_days
-  preferred_backup_window             = var.preferred_backup_window
-  preferred_maintenance_window        = var.preferred_maintenance_window
+  depends_on                   = [aws_secretsmanager_secret.db_master]
+  cluster_identifier           = local.cluster_identifier
+  engine                       = "aurora-postgresql"
+  engine_version               = local.selected_engine_version
+  master_username              = var.db_master_username
+  master_password              = local.effective_master_password
+  database_name                = var.database_name
+  port                         = var.port
+  db_subnet_group_name         = aws_db_subnet_group.this.name
+  vpc_security_group_ids       = [aws_security_group.db.id]
+  storage_encrypted            = true
+  kms_key_id                   = local.kms_key_arn
+  backup_retention_period      = var.backup_retention_days
+  preferred_backup_window      = var.preferred_backup_window
+  preferred_maintenance_window = var.preferred_maintenance_window
+  skip_final_snapshot          = var.skip_final_snapshot
+  final_snapshot_identifier = var.skip_final_snapshot ? null : coalesce(
+    var.final_snapshot_identifier,
+    "${local.cluster_identifier}-final-${replace(timestamp(), "/[: T-]/", "")}" # fallback unique name
+  )
   apply_immediately                   = var.apply_immediately
   deletion_protection                 = var.deletion_protection
   copy_tags_to_snapshot               = true
@@ -291,13 +294,8 @@ resource "aws_security_group_rule" "vpce_egress" {
   security_group_id = aws_security_group.vpce.id
 }
 
-# data "aws_vpc_endpoint_service" "secretsmanager" {
-#   service = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
-# }
-
 resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id = var.vpc_id
-  # service_name        = data.aws_vpc_endpoint_service.secretsmanager.service_name
+  vpc_id             = var.vpc_id
   service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
   vpc_endpoint_type  = "Interface"
   subnet_ids         = var.vpc_endpoint_subnet_ids
@@ -418,10 +416,6 @@ resource "aws_security_group_rule" "lambda_security_group_ingress_rule" {
   security_group_id = aws_security_group.rotator_lambda_security_group.id
 }
 
-# resource "random_id" "index" {
-#   byte_length = 2
-# }
-
 # If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
 # Rotation using AWS managed single-user rotation Lambda function
 resource "aws_secretsmanager_secret_rotation" "this" {
@@ -429,7 +423,6 @@ resource "aws_secretsmanager_secret_rotation" "this" {
   count               = var.enable_auto_secrets_rotation ? 1 : 0
   secret_id           = aws_secretsmanager_secret.db_master.id
   rotation_lambda_arn = aws_lambda_function.rotation.arn
-  # rotation_lambda_arn = aws_serverlessapplicationrepository_cloudformation_stack.secrets_rotator.outputs.RotationLambdaARN
   rotation_rules {
     automatically_after_days = var.rotation_days
   }
@@ -456,7 +449,7 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Allow Lambda access to VPC for Secrets Manager VPCE
+# Allow Lambda access to VPC for Secrets Manager VPC Endpoint
 resource "aws_iam_role_policy" "lambda_vpc" {
   name = "${local.cluster_identifier}-lambda-vpc"
   role = aws_iam_role.lambda_exec.id
