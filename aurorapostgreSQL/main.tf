@@ -130,10 +130,18 @@ resource "aws_kms_key" "this" {
         Effect    = "Allow",
         Principal = { Service = "lambda.amazonaws.com" },
         Action = [
+          "kms:Encrypt",
           "kms:Decrypt",
-          "kms:DescribeKey"
+          "kms:GenerateDataKey",
+          "kms:DescribeKey",
+          "kms:ReEncrypt*"
         ],
-        Resource = "*"
+        Resource = "*",
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "lambda.${data.aws_region.current.region}.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -483,10 +491,12 @@ resource "aws_iam_role_policy" "lambda_vpc" {
         Resource = "*"
       },
       {
-        Sid    = "AllowLambdaKMSDecryption",
+        Sid    = "AllowKMSForLambdaEnv",
         Effect = "Allow",
         Action = [
           "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
           "kms:DescribeKey"
         ],
         Resource = local.kms_key_arn
