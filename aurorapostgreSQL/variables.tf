@@ -1,6 +1,19 @@
 # variable "byte_length" {
 #   type = number
 # }
+
+# variable "rotation_lambda_zip" {
+#   description = "Path to the ZIP file for rotation lambda code (AWS sample)."
+#   type        = string
+#   default     = null
+# }
+
+# variable "cluster_parameter_family" {
+#   description = "Parameter group family for Aurora PostgreSQL."
+#   type        = string
+#   default     = "aurora-postgresql17"
+# }
+
 variable "name" {
   description = "Base name for resources."
   type        = string
@@ -211,12 +224,6 @@ variable "rotation_days" {
   default     = 180
 }
 
-# variable "rotation_lambda_zip" {
-#   description = "Path to the ZIP file for rotation lambda code (AWS sample)."
-#   type        = string
-#   default     = null
-# }
-
 variable "backup_retention_days" {
   description = "Backup retention in days."
   type        = number
@@ -300,12 +307,6 @@ variable "log_retention_days" {
   type        = number
   default     = 1
 }
-
-# variable "cluster_parameter_family" {
-#   description = "Parameter group family for Aurora PostgreSQL."
-#   type        = string
-#   default     = "aurora-postgresql17"
-# }
 
 variable "additional_cluster_parameters" {
   description = "Additional cluster parameters."

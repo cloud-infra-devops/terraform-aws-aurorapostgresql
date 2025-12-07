@@ -36,10 +36,6 @@ locals {
   )
 }
 
-resource "random_id" "index" {
-  byte_length = 2
-}
-
 locals {
   depends_on         = [aws_kms_key.this, aws_secretsmanager_secret.db_master]
   kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
@@ -268,9 +264,13 @@ resource "aws_rds_cluster_instance" "this" {
   apply_immediately               = var.apply_immediately
   tags                            = merge(var.tags, { Name = "${local.cluster_identifier}-${count.index}" })
 }
+resource "random_id" "index" {
+  byte_length = 2
+}
 
 # Secrets Manager secret for DB master credentials (encrypted with KMS)
 resource "aws_secretsmanager_secret" "db_master" {
+  depends_on  = [local.kms_key_arn]
   name        = "${local.secret_name}-${random_id.index.hex}"
   description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
   kms_key_id  = local.kms_key_arn
@@ -521,7 +521,10 @@ resource "aws_lambda_function" "rotation" {
   timeout          = 900
   memory_size      = 256
   kms_key_arn      = local.kms_key_arn
-
+  architectures    = ["x86_64"]
+  ephemeral_storage {
+    size = 1024
+  }
   dynamic "vpc_config" {
     for_each = local.lambda_has_vpc ? [1] : []
     content {
@@ -537,7 +540,16 @@ resource "aws_lambda_function" "rotation" {
       DB_ENGINE       = "postgres"
     }
   }
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
+  tags    = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
+  publish = "true"
+  lifecycle {
+    ignore_changes = [
+      last_modified,
+      source_code_hash,
+      version,
+      environment
+    ]
+  }
 }
 
 # Allow Secrets Manager to invoke the rotation Lambda for this secret
