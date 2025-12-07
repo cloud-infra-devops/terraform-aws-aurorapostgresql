@@ -1,11 +1,3 @@
-data "aws_caller_identity" "current" {}
-data "aws_partition" "current" {}
-data "aws_region" "current" {}
-data "archive_file" "lambda_function_zip" {
-  type        = "zip"
-  source_file = "${path.module}/lambda_function.py"
-  output_path = "${path.module}/lambda_function.zip"
-}
 data "aws_rds_engine_version" "aurora_pg_versions" {
   engine             = "aurora-postgresql"
   preferred_versions = var.preferred_engine_versions # e.g., ["17.2", "17.1", "17.0", "15.4", "15.3"]
@@ -14,13 +6,21 @@ data "aws_rds_engine_version" "aurora_pg_versions" {
   # parameter_group_family = "postgres15" # Example: for PostgreSQL 15
   latest = true # Set to true to get the latest available
 }
-
+data "archive_file" "lambda_function_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda_function.py"
+  output_path = "${path.module}/lambda_function.zip"
+}
+data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
+data "aws_region" "current" {}
 locals {
   selected_engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
   # Derive the parameter group family from the selected engine version (major component)
   selected_major                     = split(".", local.selected_engine_version)[0]
   cluster_parameter_family_effective = "aurora-postgresql${local.selected_major}"
 }
+
 # Generate password that excludes '/', '@', '\"', and space
 resource "random_password" "db_master" {
   count            = var.db_master_password == null && var.generate_master_password ? 1 : 0
@@ -30,22 +30,113 @@ resource "random_password" "db_master" {
 }
 
 locals {
-  # depends_on = [random_password.db_master]
+  depends_on = [aws_kms_key.this, aws_secretsmanager_secret.db_master, random_password.db_master]
   effective_master_password = var.db_master_password != null ? var.db_master_password : (
     var.generate_master_password ? random_password.db_master[0].result : null
   )
-}
-
-locals {
-  depends_on         = [aws_kms_key.this, aws_secretsmanager_secret.db_master]
-  kms_key_arn        = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
-  cluster_identifier = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
+  aurora_db_sg_ids      = var.use_existing_aurora_db_sg != false && var.existing_aurora_db_security_group_ids != [] ? var.existing_aurora_db_security_group_ids : aws_security_group.db.id
+  vpce_sg_ids           = var.use_existing_vpce_sg != false && var.existing_vpce_security_group_ids != [] ? var.existing_vpce_security_group_ids : aws_security_group.vpce.id
+  lambda_rotator_sg_ids = var.use_existing_lambda_rotator_sg != false && var.existing_lambda_rotator_security_group_ids != [] ? var.existing_lambda_rotator_security_group_ids : aws_security_group.rotator_lambda_security_group.id
+  kms_key_arn           = var.use_existing_kms_key != false && var.existing_kms_key_arn != null ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
+  cluster_identifier    = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
   # Secrets Manager name
   secret_name = var.secret_name != null ? var.secret_name : "${local.cluster_identifier}/master"
   log_types = compact([
     var.enable_error_logs ? "postgresql" : null, # Aurora Postgres error logs written to CloudWatch Logs "postgresql"
     var.enable_slow_query_logs ? "postgresql" : null
   ])
+}
+# ----------- Security Groups ------------ #
+# Security group for the Aurora DB cluster
+resource "aws_security_group" "db" {
+  name        = "${local.cluster_identifier}-sg"
+  description = "Security group for Aurora PostgreSQL cluster"
+  vpc_id      = var.vpc_id
+  tags        = merge(var.tags, { Name = "${local.cluster_identifier}-db-sg" })
+
+  dynamic "ingress" {
+    for_each = distinct(compact(var.allowed_other_ingress_cidrs))
+    content {
+      description = "DB access from allowed other ingress CIDRs-(${ingress.value})"
+      from_port   = var.port
+      to_port     = var.port
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
+  }
+  dynamic "ingress" {
+    for_each = distinct(compact(var.existing_aurora_db_security_group_ids))
+    content {
+      description     = "DB access from allowed existing SG-(${ingress.value})"
+      from_port       = var.port
+      to_port         = var.port
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+# Security group for the VPC Interface Endpoint
+resource "aws_security_group" "vpce" {
+  depends_on  = [aws_security_group.db]
+  name        = "${local.cluster_identifier}-secretsmanager-vpce-sg"
+  description = "SG for Secrets Manager VPC endpoint interface"
+  vpc_id      = var.vpc_id
+  tags        = merge(var.tags, { Name = "${local.cluster_identifier}-vpce-sg" })
+}
+resource "aws_security_group_rule" "vpce_ingress" {
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.db.id
+  security_group_id        = aws_security_group.vpce.id
+}
+resource "aws_security_group_rule" "vpce_egress" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.vpce.id
+}
+# Security group for the Rotator Lambda Function
+resource "aws_security_group" "rotator_lambda_security_group" {
+  name   = "rotator_lambda_security_group"
+  vpc_id = var.vpc_id
+
+  tags = {
+    Name = "rotator_lambda_security_group"
+  }
+}
+resource "aws_security_group_rule" "lambda_security_group_egress_rule1" {
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = [var.vpc_cidr]
+  security_group_id = aws_security_group.rotator_lambda_security_group.id
+}
+resource "aws_security_group_rule" "lambda_security_group_egress_rule2" {
+  type              = "egress"
+  from_port         = var.port
+  to_port           = var.port
+  protocol          = "tcp"
+  cidr_blocks       = [var.vpc_cidr]
+  security_group_id = aws_security_group.rotator_lambda_security_group.id
+}
+resource "aws_security_group_rule" "lambda_security_group_ingress_rule" {
+  type              = "ingress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = [var.vpc_cidr]
+  security_group_id = aws_security_group.rotator_lambda_security_group.id
 }
 
 # Optionally create a new KMS CMK
@@ -144,57 +235,11 @@ resource "aws_kms_key" "this" {
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-kms" })
 }
 
-# Security group for the cluster
-resource "aws_security_group" "db" {
-  name        = "${local.cluster_identifier}-sg"
-  description = "Security group for Aurora PostgreSQL cluster"
-  vpc_id      = var.vpc_id
-  tags        = merge(var.tags, { Name = "${local.cluster_identifier}-db-sg" })
-
-  dynamic "ingress" {
-    for_each = distinct(compact(var.allowed_other_ingress_cidrs))
-    content {
-      description = "DB access from allowed other ingress CIDRs-(${ingress.value})"
-      from_port   = var.port
-      to_port     = var.port
-      protocol    = "tcp"
-      cidr_blocks = [ingress.value]
-    }
-  }
-
-  dynamic "ingress" {
-    for_each = distinct(compact(var.allowed_existing_security_group_ids))
-    content {
-      description     = "DB access from allowed existing SG-(${ingress.value})"
-      from_port       = var.port
-      to_port         = var.port
-      protocol        = "tcp"
-      security_groups = [ingress.value]
-    }
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
 # Subnet group
 resource "aws_db_subnet_group" "this" {
   name       = "${local.cluster_identifier}-subnet-group"
   subnet_ids = var.subnet_ids
   tags       = merge(var.tags, { Name = "${local.cluster_identifier}-subnet-group" })
-}
-
-# Optionally create a CloudWatch Logs group for PostgreSQL logs
-resource "aws_cloudwatch_log_group" "postgresql" {
-  count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
-  name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
-  retention_in_days = var.log_retention_days
-  # kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
@@ -213,10 +258,19 @@ resource "aws_rds_cluster_parameter_group" "this" {
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-cluster-params" })
 }
 
-# Removed duplicate aws_rds_cluster_parameter_group using unsupported "parameters" attribute.
+# Optionally create a CloudWatch Logs group for PostgreSQL logs
+resource "aws_cloudwatch_log_group" "postgresql" {
+  count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
+  name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
+  retention_in_days = var.log_retention_days
+  # kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
+}
+
 # Cluster (ensure CloudWatch Logs export is enabled)
+# vpc_security_group_ids       = concat(aws_security_group.db.id, var.existing_aurora_db_security_group_ids)
 resource "aws_rds_cluster" "this" {
-  depends_on                   = [aws_secretsmanager_secret.db_master]
+  depends_on                   = [aws_secretsmanager_secret.db_master, local.kms_key_arn, local.effective_master_password, local.selected_engine_version]
   cluster_identifier           = local.cluster_identifier
   engine                       = "aurora-postgresql"
   engine_version               = local.selected_engine_version
@@ -225,7 +279,7 @@ resource "aws_rds_cluster" "this" {
   database_name                = var.database_name
   port                         = var.port
   db_subnet_group_name         = aws_db_subnet_group.this.name
-  vpc_security_group_ids       = concat([aws_security_group.db.id], var.allowed_existing_security_group_ids)
+  vpc_security_group_ids       = local.aurora_db_sg_ids
   storage_encrypted            = true
   kms_key_id                   = local.kms_key_arn
   backup_retention_period      = var.backup_retention_days
@@ -293,38 +347,13 @@ resource "aws_secretsmanager_secret_version" "db_master" {
 }
 
 # VPC endpoint for Secrets Manager to keep rotation traffic inside VPC
-resource "aws_security_group" "vpce" {
-  depends_on  = [aws_security_group.db]
-  name        = "${local.cluster_identifier}-secretsmanager-vpce-sg"
-  description = "SG for Secrets Manager VPC endpoint interface"
-  vpc_id      = var.vpc_id
-  tags        = merge(var.tags, { Name = "${local.cluster_identifier}-vpce-sg" })
-}
-
-resource "aws_security_group_rule" "vpce_ingress" {
-  type                     = "ingress"
-  from_port                = 443
-  to_port                  = 443
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.db.id
-  security_group_id        = aws_security_group.vpce.id
-}
-
-resource "aws_security_group_rule" "vpce_egress" {
-  type              = "egress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.vpce.id
-}
-
+# security_group_ids = concat(aws_security_group.vpce.id, var.existing_vpce_security_group_ids)
 resource "aws_vpc_endpoint" "secretsmanager" {
   vpc_id             = var.vpc_id
   service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
   vpc_endpoint_type  = "Interface"
   subnet_ids         = var.vpc_endpoint_subnet_ids
-  security_group_ids = [aws_security_group.vpce.id]
+  security_group_ids = local.vpce_sg_ids
   # private_dns_enabled = true
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
 }
@@ -405,46 +434,10 @@ resource "aws_iam_role_policy" "rotation_inline" {
   })
 }
 
-resource "aws_security_group" "rotator_lambda_security_group" {
-  name   = "rotator_lambda_security_group"
-  vpc_id = var.vpc_id
-
-  tags = {
-    Name = "rotator_lambda_security_group"
-  }
-}
-
-resource "aws_security_group_rule" "lambda_security_group_egress_rule1" {
-  type              = "egress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = [var.vpc_cidr]
-  security_group_id = aws_security_group.rotator_lambda_security_group.id
-}
-
-resource "aws_security_group_rule" "lambda_security_group_egress_rule2" {
-  type              = "egress"
-  from_port         = var.port
-  to_port           = var.port
-  protocol          = "tcp"
-  cidr_blocks       = [var.vpc_cidr]
-  security_group_id = aws_security_group.rotator_lambda_security_group.id
-}
-
-resource "aws_security_group_rule" "lambda_security_group_ingress_rule" {
-  type              = "ingress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  cidr_blocks       = [var.vpc_cidr]
-  security_group_id = aws_security_group.rotator_lambda_security_group.id
-}
-
 # If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
 # Rotation using AWS managed single-user rotation Lambda function
 resource "aws_secretsmanager_secret_rotation" "this" {
-  depends_on          = [aws_secretsmanager_secret_version.db_master]
+  depends_on          = [aws_secretsmanager_secret_version.db_master, aws_lambda_function.rotation]
   count               = var.enable_auto_secrets_rotation ? 1 : 0
   secret_id           = aws_secretsmanager_secret.db_master.id
   rotation_lambda_arn = aws_lambda_function.rotation.arn
@@ -506,12 +499,12 @@ resource "aws_iam_role_policy" "lambda_vpc" {
 }
 
 locals {
-  lambda_has_vpc = length(var.lambda_subnet_ids) > 0 && length(var.lambda_security_group_ids) > 0
+  lambda_has_vpc = length(var.lambda_subnet_ids) > 0 && length(var.existing_lambda_rotator_security_group_ids) > 0
 }
 
 # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
 resource "aws_lambda_function" "rotation" {
-  depends_on       = [aws_vpc_endpoint.secretsmanager]
+  depends_on       = [aws_vpc_endpoint.secretsmanager, local.kms_key_arn]
   function_name    = "${local.cluster_identifier}-rotation"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
@@ -529,7 +522,8 @@ resource "aws_lambda_function" "rotation" {
     for_each = local.lambda_has_vpc ? [1] : []
     content {
       subnet_ids         = var.lambda_subnet_ids
-      security_group_ids = var.lambda_security_group_ids
+      security_group_ids = local.lambda_rotator_sg_ids
+      # security_group_ids = concat(var.existing_lambda_rotator_security_group_ids, aws_security_group.rotator_lambda_security_group.id)
     }
   }
   environment {

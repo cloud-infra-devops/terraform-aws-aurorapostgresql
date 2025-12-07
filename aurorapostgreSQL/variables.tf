@@ -13,6 +13,61 @@
 #   type        = string
 #   default     = "aurora-postgresql17"
 # }
+variable "database_name" {
+  description = "Initial database name."
+  type        = string
+  default     = "appdb"
+}
+
+variable "db_master_username" {
+  description = "Master username."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_master_password" {
+  description = "Master password. Must be 8-41 printable ASCII characters, excluding '/', '@', '\"', and space."
+  type        = string
+  sensitive   = true
+  default     = null
+  validation {
+    condition = var.db_master_password == null || (
+      length(var.db_master_password) >= 8 &&
+      can(regex("^[\\x20-\\x7E]+$", var.db_master_password)) && # printable ASCII 0x20-0x7E
+      !can(regex("[/@\" ]", var.db_master_password))            # exclude '/', '@', '\"', and space
+    )
+    error_message = "db_master_password must be printable ASCII (0x20-0x7E), at least 8 characters, and must not contain '/', '@', '\"', or any spaces."
+  }
+}
+
+# Option to auto-generate a compliant password if none provided
+variable "generate_master_password" {
+  description = "If true and db_master_password is null, generate a compliant random password."
+  type        = bool
+  default     = true
+}
+variable "generated_password_length" {
+  description = "Length of generated master password."
+  type        = number
+  default     = 24
+}
+variable "use_existing_kms_key" {
+  description = "Use an existing KMS key instead of creating one."
+  type        = bool
+  # default     = false
+}
+
+variable "existing_kms_key_arn" {
+  description = "ARN of existing KMS key."
+  type        = string
+  # default     = null
+}
+
+variable "kms_deletion_window_in_days" {
+  description = "Deletion window for the CMK."
+  type        = number
+  default     = 7
+}
 
 variable "name" {
   description = "Base name for resources."
@@ -56,15 +111,31 @@ variable "allowed_other_ingress_cidrs" {
   # default     = []
 }
 
-variable "allowed_existing_security_group_ids" {
-  description = "Existing Security group IDs allowed to connect to the DB port."
+variable "existing_aurora_db_security_group_ids" {
+  description = "Existing Security group IDs allowed to connect to the Aurora DB port."
   type        = list(string)
   # default     = []
 }
-variable "lambda_security_group_ids" {
+
+variable "existing_vpce_security_group_ids" {
+  description = "Existing Security group IDs allowed for VPC Interface Endpoint"
+  type        = list(string)
+  # default     = []
+}
+
+variable "existing_lambda_rotator_security_group_ids" {
   description = "Security group IDs for the rotation Lambda when placed in VPC. Must be non-empty when lambda_subnet_ids is non-empty."
   type        = list(string)
-  default     = []
+  # default     = []
+}
+variable "use_existing_aurora_db_sg" {
+  type = bool
+}
+variable "use_existing_vpce_sg" {
+  type = bool
+}
+variable "use_existing_lambda_rotator_sg" {
+  type = bool
 }
 variable "port" {
   description = "PostgreSQL port."
@@ -148,62 +219,6 @@ variable "instance_count" {
   description = "Number of instances in the cluster."
   type        = number
   default     = 2
-}
-
-variable "database_name" {
-  description = "Initial database name."
-  type        = string
-  default     = "appdb"
-}
-
-variable "db_master_username" {
-  description = "Master username."
-  type        = string
-  sensitive   = true
-}
-
-variable "db_master_password" {
-  description = "Master password. Must be 8-41 printable ASCII characters, excluding '/', '@', '\"', and space."
-  type        = string
-  sensitive   = true
-  default     = null
-  validation {
-    condition = var.db_master_password == null || (
-      length(var.db_master_password) >= 8 &&
-      can(regex("^[\\x20-\\x7E]+$", var.db_master_password)) && # printable ASCII 0x20-0x7E
-      !can(regex("[/@\" ]", var.db_master_password))            # exclude '/', '@', '\"', and space
-    )
-    error_message = "db_master_password must be printable ASCII (0x20-0x7E), at least 8 characters, and must not contain '/', '@', '\"', or any spaces."
-  }
-}
-
-# Option to auto-generate a compliant password if none provided
-variable "generate_master_password" {
-  description = "If true and db_master_password is null, generate a compliant random password."
-  type        = bool
-  default     = true
-}
-variable "generated_password_length" {
-  description = "Length of generated master password."
-  type        = number
-  default     = 24
-}
-variable "use_existing_kms_key" {
-  description = "Use an existing KMS key instead of creating one."
-  type        = bool
-  # default     = false
-}
-
-variable "existing_kms_key_arn" {
-  description = "ARN of existing KMS key."
-  type        = string
-  # default     = null
-}
-
-variable "kms_deletion_window_in_days" {
-  description = "Deletion window for the CMK."
-  type        = number
-  default     = 7
 }
 
 variable "secret_name" {

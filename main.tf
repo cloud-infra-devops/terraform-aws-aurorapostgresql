@@ -21,18 +21,23 @@ provider "aws" {
 }
 
 module "aurora_postgres_cluster" {
-  source                              = "./aurorapostgreSQL"
-  name                                = "duke-app"
-  vpc_id                              = "vpc-07b3e9e8021bfb088"
-  vpc_cidr                            = "172.16.0.0/16"
-  allowed_other_ingress_cidrs         = ["10.0.0.0/8", "192.168.0.0/16"]
-  allowed_existing_security_group_ids = []
-  subnet_ids                          = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
-  vpc_endpoint_subnet_ids             = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
-  db_master_username                  = "postgreSQLdbAdmin"
-  enable_auto_secrets_rotation        = true
-  use_existing_kms_key                = false
-  existing_kms_key_arn                = null
+  source                                     = "./aurorapostgreSQL"
+  name                                       = "duke-app"
+  vpc_id                                     = "vpc-07b3e9e8021bfb088"
+  vpc_cidr                                   = "172.16.0.0/16"
+  allowed_other_ingress_cidrs                = ["10.0.0.0/8", "192.168.0.0/16"]
+  use_existing_aurora_db_sg                  = false
+  use_existing_lambda_rotator_sg             = false
+  use_existing_vpce_sg                       = false
+  existing_aurora_db_security_group_ids      = []
+  existing_lambda_rotator_security_group_ids = []
+  existing_vpce_security_group_ids           = []
+  subnet_ids                                 = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
+  vpc_endpoint_subnet_ids                    = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
+  db_master_username                         = "postgreSQLdbAdmin"
+  enable_auto_secrets_rotation               = true
+  use_existing_kms_key                       = false
+  existing_kms_key_arn                       = null
   tags = {
     Environment = "sbx"
     Owner       = "cloud-infra-devops"
