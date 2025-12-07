@@ -34,10 +34,10 @@ locals {
   effective_master_password = var.db_master_password != null ? var.db_master_password : (
     var.generate_master_password ? random_password.db_master[0].result : null
   )
-  aurora_db_sg_ids      = var.use_existing_aurora_db_sg != false && var.existing_aurora_db_security_group_ids != [] ? var.existing_aurora_db_security_group_ids : aws_security_group.db.id
-  vpce_sg_ids           = var.use_existing_vpce_sg != false && var.existing_vpce_security_group_ids != [] ? var.existing_vpce_security_group_ids : aws_security_group.vpce.id
-  lambda_rotator_sg_ids = var.use_existing_lambda_rotator_sg != false && var.existing_lambda_rotator_security_group_ids != [] ? var.existing_lambda_rotator_security_group_ids : aws_security_group.rotator_lambda_security_group.id
-  kms_key_arn           = var.use_existing_kms_key != false && var.existing_kms_key_arn != null ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
+  aurora_db_sg_ids      = var.use_existing_aurora_db_sg && length(var.existing_aurora_db_security_group_ids) > 0 ? var.existing_aurora_db_security_group_ids : [aws_security_group.db.id]
+  vpce_sg_ids           = var.use_existing_vpce_sg && length(var.existing_vpce_security_group_ids) > 0 ? var.existing_vpce_security_group_ids : [aws_security_group.vpce.id]
+  lambda_rotator_sg_ids = var.use_existing_lambda_rotator_sg && length(var.existing_lambda_rotator_security_group_ids) > 0 ? var.existing_lambda_rotator_security_group_ids : [aws_security_group.rotator_lambda_security_group.id]
+  kms_key_arn           = var.use_existing_kms_key && var.existing_kms_key_arn != null ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
   cluster_identifier    = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
   # Secrets Manager name
   secret_name = var.secret_name != null ? var.secret_name : "${local.cluster_identifier}/master"
