@@ -3,7 +3,11 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "6.25.0"
+      version = "6.28.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "3.7.2"
     }
   }
   cloud {
@@ -32,7 +36,7 @@ module "aurora_postgres_cluster" {
   existing_aurora_db_security_group_ids      = []
   existing_lambda_rotator_security_group_ids = []
   existing_vpce_security_group_ids           = []
-  subnet_ids                                 = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
+  aurora_db_subnet_ids                       = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
   vpc_endpoint_subnet_ids                    = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
   db_master_username                         = "postgreSQLdbAdmin"
   enable_auto_secrets_rotation               = true

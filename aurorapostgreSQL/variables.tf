@@ -13,6 +13,7 @@
 #   type        = string
 #   default     = "aurora-postgresql17"
 # }
+
 variable "database_name" {
   description = "Initial database name."
   type        = string
@@ -89,7 +90,7 @@ variable "vpc_cidr" {
   type = string
 }
 
-variable "subnet_ids" {
+variable "aurora_db_subnet_ids" {
   description = "Private subnet IDs for the DB subnet group."
   type        = list(string)
 }
