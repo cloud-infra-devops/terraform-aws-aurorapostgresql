@@ -45,5 +45,6 @@ module "aurora_postgres_cluster" {
   tags = {
     Environment = "sbx"
     Owner       = "cloud-infra-devops"
+    email       = "adminrameshe@gmail.com"
   }
 }
