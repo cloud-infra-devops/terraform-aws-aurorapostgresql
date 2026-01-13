@@ -1,0 +1,123 @@
+# https://aws.amazon.com/blogs/security/use-iam-roles-to-connect-github-actions-to-actions-in-aws/
+# https://wearecommunity.io/communities/devops-india/articles/4552#
+# https://skundunotes.com/2025/01/03/provision-aws-resources-with-github-and-hcp-terraform/
+# https://skundunotes.com/2023/03/07/ci-cd-with-terraform-and-github-actions-to-deploy-to-aws/
+# https://skundunotes.com/2023/02/28/securely-integrate-aws-credentials-with-github-actions-using-openid-connect/
+# https://faun.pub/terraform-cloud-f03fb4eaaa87
+# https://faun.pub/terraform-cloud-with-github-actions-dc897ed06e0d
+# https://developer.hashicorp.com/terraform/tutorials/automation/github-actions
+# https://github.com/charandasari/null-github-actions-terra/blob/main/.github/workflows/null-terraform.yaml
+# https://medium.com/@charandasar/automating-infrastructure-deployment-ci-cd-with-github-actions-terraform-cloud-and-terraform-3097ab76ac87
+# https://terrateam.io/blog/ci-cd-pipeline-for-terraform
+# https://www.firefly.ai/academy/integrating-oidc-with-github-action-to-manage-terraform-deployment-on-aws
+# https://youtu.be/B55rso_UR6I?si=e27SuLNIt8gONeRx
+# https://www.cloudthat.com/resources/blog/a-guide-to-integrate-vcs-into-the-terraform-cloud
+
+# This workflow will create AWS resource using TF Cloud 
+# It is reusable workflow that can be called in other workflows
+
+name: AWS Infra Creation Using in HCP Terraform 
+
+on:
+  workflow_call:
+    secrets:
+        TF_API_TOKEN:
+            required: true
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  tfcode_path: "./"
+  tfc_hostname: "app.terraform.io"
+  tfc_organisation: "cloud-infra-dev"
+  tfc_workspace: "testing-terraform-aws-modules"
+
+jobs: 
+  aws_tfc_job:
+    name: Create AWS Infra Using TFC
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout tf code in runner environment
+      uses: actions/checkout@v6.0.2
+
+    # Configure Terraform cloud API token, since we are using Remote backend option of Terraform cloud in AWS code
+    - name: Setup Terraform CLI
+      uses: hashicorp/setup-terraform@v3.1.2
+      with:
+        cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+        terraform_version: 1.14.3
+
+    # Add the AWS Creds as ENV variable in HCP workspace, since the tf run happens in HCP environment
+
+    # Invoke the Terraform commands
+    - name: Terraform init and validate
+      run: |
+        echo `pwd`
+        echo "** Running Terraform Init**"
+        terraform init
+          
+        echo "** Running Terraform Validate**"
+        terraform validate
+      working-directory: ${{ env.tfcode_path }}
+
+    - name: Terraform Plan
+      uses: hashicorp/tfc-workflows-github/actions/create-run@v1.3.0
+      id: run
+      with:
+        workspace: ${{ env.tfc_workspace }}
+        plan_only: true
+        message: "Plan Run from GitHub Actions"
+        ## Can specify hostname,token,organization as direct inputs
+        hostname: ${{ env.tfc_hostname }}
+        token: ${{ secrets.TF_API_TOKEN }}
+        organization: ${{ env.tfc_organisation }}
+
+    - name: Terraform Plan Output
+      uses: hashicorp/tfc-workflows-github/actions/plan-output@v1.3.0
+      id: plan-output
+      with:
+        hostname: ${{ env.tfc_hostname }}
+        token: ${{ secrets.TF_API_TOKEN }}
+        organization: ${{ env.tfc_organisation }}
+        plan: ${{ steps.run.outputs.plan_id }}
+    
+    - name: Reference Plan Output
+      run: |
+        echo "Plan status: ${{ steps.plan-output.outputs.plan_status }}"
+        echo "Resources to Add: ${{ steps.plan-output.outputs.add }}"
+        echo "Resources to Change: ${{ steps.plan-output.outputs.change }}"
+        echo "Resources to Destroy: ${{ steps.plan-output.outputs.destroy }}"
+
+  # Once the user verifies the Terraform Plan, the user can run the Terraform Apply and Destroy commands
+  apply_terraform_plan:
+      needs: aws_tfc_job
+      if: github.event_name == 'workflow_dispatch'
+      runs-on: ubuntu-latest
+      steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_version: 1.14.3
+
+      # Invoke the Terraform commands
+      - name: Terraform init and validate
+        run: |
+          echo `pwd`
+          echo "** Running Terraform Init**"
+          terraform init
+        
+          echo "** Running Terraform Validate**"
+          terraform validate
+        working-directory: ${{ env.tfcode_path }}
+      
+      - name: Terraform Apply
+        run: echo "** Running Terraform Apply**"; terraform apply -auto-approve
+        working-directory: ${{ env.tfcode_path }}

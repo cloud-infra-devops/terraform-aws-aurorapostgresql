@@ -20,8 +20,8 @@ terraform {
 }
 
 provider "aws" {
-  region              = "us-west-2"
-  allowed_account_ids = ["211125325120"]
+  region = "us-west-2"
+  # allowed_account_ids = ["211125325120"]
 }
 
 module "aurora_postgres_cluster" {
