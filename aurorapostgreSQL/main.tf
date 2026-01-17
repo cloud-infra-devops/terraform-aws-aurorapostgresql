@@ -1,11 +1,3 @@
-# Generate password that excludes '/', '@', '\"', and space
-resource "random_password" "db_master" {
-  count            = var.db_master_password == null && var.generate_master_password ? 1 : 0
-  length           = var.generated_password_length
-  special          = true
-  override_special = "!#$%&()*+,-.:;<=>?[\\]^_{|}~" # excludes / @ " and includes allowed specials
-}
-
 # ----------- Security Groups ------------ #
 # Security group for the Aurora DB cluster
 resource "aws_security_group" "db" {
@@ -34,13 +26,23 @@ resource "aws_security_group" "db" {
       security_groups = [ingress.value]
     }
   }
+  # Restrict egress to only necessary traffic
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS to VPC endpoints"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+  egress {
+    description = "DNS resolution"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = [var.vpc_cidr]
   }
 }
+
 # Security group for the VPC Interface Endpoint
 resource "aws_security_group" "vpce" {
   depends_on  = [aws_security_group.db]
@@ -49,54 +51,84 @@ resource "aws_security_group" "vpce" {
   vpc_id      = var.vpc_id
   tags        = merge(var.tags, { Name = "${local.cluster_identifier}-vpce-sg" })
 }
+
 resource "aws_security_group_rule" "vpce_ingress" {
   type                     = "ingress"
+  description              = "HTTPS from Lambda and DB security groups"
   from_port                = 443
   to_port                  = 443
   protocol                 = "tcp"
   source_security_group_id = aws_security_group.db.id
   security_group_id        = aws_security_group.vpce.id
 }
+
+resource "aws_security_group_rule" "vpce_ingress_lambda" {
+  type                     = "ingress"
+  description              = "HTTPS from Lambda rotator"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.rotator_lambda_security_group.id
+  security_group_id        = aws_security_group.vpce.id
+}
+
 resource "aws_security_group_rule" "vpce_egress" {
   type              = "egress"
+  description       = "All outbound traffic"
   from_port         = 0
   to_port           = 0
   protocol          = "-1"
   cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = aws_security_group.vpce.id
 }
+
 # Security group for the Rotator Lambda Function
 resource "aws_security_group" "rotator_lambda_security_group" {
-  name   = "rotator_lambda_security_group"
-  vpc_id = var.vpc_id
-
-  tags = {
-    Name = "rotator_lambda_security_group"
-  }
+  name        = "${local.cluster_identifier}-rotator-lambda-sg"
+  description = "Security group for Lambda rotation function"
+  vpc_id      = var.vpc_id
+  tags        = merge(var.tags, { Name = "${local.cluster_identifier}-rotator-lambda-sg" })
 }
-resource "aws_security_group_rule" "lambda_security_group_egress_rule1" {
+
+resource "aws_security_group_rule" "lambda_security_group_egress_https" {
   type              = "egress"
+  description       = "HTTPS to VPC endpoints"
   from_port         = 443
   to_port           = 443
   protocol          = "tcp"
   cidr_blocks       = [var.vpc_cidr]
   security_group_id = aws_security_group.rotator_lambda_security_group.id
 }
-resource "aws_security_group_rule" "lambda_security_group_egress_rule2" {
+
+resource "aws_security_group_rule" "lambda_security_group_egress_postgres" {
   type              = "egress"
+  description       = "PostgreSQL to Aurora cluster"
   from_port         = var.port
   to_port           = var.port
   protocol          = "tcp"
   cidr_blocks       = [var.vpc_cidr]
   security_group_id = aws_security_group.rotator_lambda_security_group.id
 }
-resource "aws_security_group_rule" "lambda_security_group_ingress_rule" {
-  type              = "ingress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
+
+resource "aws_security_group_rule" "lambda_security_group_egress_dns" {
+  type              = "egress"
+  description       = "DNS resolution"
+  from_port         = 53
+  to_port           = 53
+  protocol          = "udp"
   cidr_blocks       = [var.vpc_cidr]
   security_group_id = aws_security_group.rotator_lambda_security_group.id
+}
+
+# Allow Lambda to connect to Aurora DB
+resource "aws_security_group_rule" "db_ingress_from_lambda" {
+  type                     = "ingress"
+  description              = "PostgreSQL from Lambda rotator"
+  from_port                = var.port
+  to_port                  = var.port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.rotator_lambda_security_group.id
+  security_group_id        = aws_security_group.db.id
 }
 
 # Optionally create a new KMS CMK
@@ -193,6 +225,14 @@ resource "aws_kms_key" "this" {
     ]
   })
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-kms" })
+}
+
+# Generate password that excludes '/', '@', '\"', and space
+resource "random_password" "db_master" {
+  count            = var.db_master_password == null && var.generate_master_password ? 1 : 0
+  length           = var.generated_password_length
+  special          = true
+  override_special = "!#$%&()*+,-.:;<=>?[\\]^_{|}~" # excludes / @ " and includes allowed specials
 }
 
 # Subnet group
@@ -308,15 +348,47 @@ resource "aws_secretsmanager_secret_version" "db_master" {
 }
 
 # VPC endpoint for Secrets Manager to keep rotation traffic inside VPC
-# security_group_ids = concat(aws_security_group.vpce.id, var.existing_vpce_security_group_ids)
 resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id             = var.vpc_id
-  service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
-  vpc_endpoint_type  = "Interface"
-  subnet_ids         = var.vpc_endpoint_subnet_ids
-  security_group_ids = local.vpce_sg_ids
-  # private_dns_enabled = true
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.vpc_endpoint_subnet_ids
+  security_group_ids  = local.vpce_sg_ids
+  private_dns_enabled = true
+  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
+}
+
+# VPC endpoint for Lambda (for rotation function)
+resource "aws_vpc_endpoint" "lambda" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.lambda"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.vpc_endpoint_subnet_ids
+  security_group_ids  = local.vpce_sg_ids
+  private_dns_enabled = true
+  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-vpce" })
+}
+
+# VPC endpoint for CloudWatch Logs
+resource "aws_vpc_endpoint" "logs" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.logs"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.vpc_endpoint_subnet_ids
+  security_group_ids  = local.vpce_sg_ids
+  private_dns_enabled = true
+  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-logs-vpce" })
+}
+
+# VPC endpoint for KMS
+resource "aws_vpc_endpoint" "kms" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.kms"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.vpc_endpoint_subnet_ids
+  security_group_ids  = local.vpce_sg_ids
+  private_dns_enabled = true
+  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-kms-vpce" })
 }
 
 # IAM role used by Secrets Manager rotation function (least privilege)
@@ -461,7 +533,7 @@ resource "aws_iam_role_policy" "lambda_vpc" {
 
 # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
 resource "aws_lambda_function" "rotation" {
-  depends_on       = [aws_vpc_endpoint.secretsmanager, local.kms_key_arn]
+  depends_on       = [aws_vpc_endpoint.secretsmanager, aws_vpc_endpoint.lambda, aws_vpc_endpoint.logs, aws_vpc_endpoint.kms, local.kms_key_arn]
   function_name    = "${local.cluster_identifier}-rotation"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
@@ -480,15 +552,22 @@ resource "aws_lambda_function" "rotation" {
     content {
       subnet_ids         = var.lambda_subnet_ids
       security_group_ids = local.lambda_rotator_sg_ids
-      # security_group_ids = concat(var.existing_lambda_rotator_security_group_ids, aws_security_group.rotator_lambda_security_group.id)
     }
   }
   environment {
     variables = {
-      SECRET_ARN      = aws_secretsmanager_secret.db_master.arn
-      RDS_CLUSTER_ARN = aws_rds_cluster.this.arn
-      KMS_KEY_ARN     = local.kms_key_arn
-      DB_ENGINE       = "postgres"
+      SECRET_ARN                 = aws_secretsmanager_secret.db_master.arn
+      RDS_CLUSTER_ARN            = aws_rds_cluster.this.arn
+      KMS_KEY_ARN                = local.kms_key_arn
+      DB_ENGINE                  = "postgres"
+      SECRETS_MANAGER_ENDPOINT   = "https://secretsmanager.${data.aws_region.current.region}.amazonaws.com"
+      EXCLUDE_CHARACTERS         = ":/@\"'\\"
+      PASSWORD_LENGTH            = "32"
+      EXCLUDE_NUMBERS            = "false"
+      EXCLUDE_PUNCTUATION        = "false"
+      EXCLUDE_UPPERCASE          = "false"
+      EXCLUDE_LOWERCASE          = "false"
+      REQUIRE_EACH_INCLUDED_TYPE = "true"
     }
   }
   tags    = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-lambda" })
@@ -510,6 +589,7 @@ resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
   function_name = aws_lambda_function.rotation.function_name
   principal     = "secretsmanager.amazonaws.com"
   source_arn    = aws_secretsmanager_secret.db_master.arn
+  qualifier     = aws_lambda_function.rotation.version
 }
 
 # Resource policy for the secret limiting access to rotation role and account root
@@ -560,6 +640,178 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   statistic           = "Average"
   threshold           = var.cpu_high_threshold
   alarm_description   = "High CPU utilization on Aurora PG cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+# Comprehensive CloudWatch Alarms for Aurora PostgreSQL
+resource "aws_cloudwatch_metric_alarm" "freeable_memory_low" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-FreeableMemory-Low"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "FreeableMemory"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.memory_freeable_threshold
+  alarm_description   = "Low freeable memory on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "database_connections_high" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-DatabaseConnections-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "DatabaseConnections"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.database_connections_threshold
+  alarm_description   = "High number of database connections on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "read_latency_high" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-ReadLatency-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "ReadLatency"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.read_latency_threshold
+  alarm_description   = "High read latency on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "write_latency_high" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-WriteLatency-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "WriteLatency"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.write_latency_threshold
+  alarm_description   = "High write latency on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "deadlocks_high" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-Deadlocks-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Deadlocks"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = var.deadlock_threshold
+  alarm_description   = "High number of deadlocks on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "aurora_replica_lag_high" {
+  count               = var.enable_comprehensive_alarms && var.instance_count > 1 ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-AuroraReplicaLag-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "AuroraReplicaLag"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.replica_lag_threshold
+  alarm_description   = "High Aurora replica lag on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "buffer_cache_hit_ratio_low" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-BufferCacheHitRatio-Low"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "BufferCacheHitRatio"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.buffer_cache_hit_ratio_threshold
+  alarm_description   = "Low buffer cache hit ratio on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "disk_queue_depth_high" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-DiskQueueDepth-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "DiskQueueDepth"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.disk_queue_depth_threshold
+  alarm_description   = "High disk queue depth on Aurora PostgreSQL cluster"
+  dimensions = {
+    DBClusterIdentifier = aws_rds_cluster.this.id
+  }
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.ok_action_arns
+  tags          = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "swap_usage_high" {
+  count               = var.enable_comprehensive_alarms ? 1 : 0
+  alarm_name          = "${local.cluster_identifier}-SwapUsage-High"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "SwapUsage"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = var.swap_usage_threshold
+  alarm_description   = "High swap usage on Aurora PostgreSQL cluster"
   dimensions = {
     DBClusterIdentifier = aws_rds_cluster.this.id
   }

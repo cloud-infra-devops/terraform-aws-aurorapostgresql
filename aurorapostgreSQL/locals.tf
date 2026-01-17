@@ -35,6 +35,6 @@ locals {
     var.enable_error_logs ? "postgresql" : null, # Aurora Postgres error logs written to CloudWatch Logs "postgresql"
     var.enable_slow_query_logs ? "postgresql" : null
   ])
-  lambda_has_vpc = length(var.lambda_subnet_ids) > 0 && length(var.existing_lambda_rotator_security_group_ids) > 0
+  lambda_has_vpc = length(var.lambda_subnet_ids) > 0
 }
 

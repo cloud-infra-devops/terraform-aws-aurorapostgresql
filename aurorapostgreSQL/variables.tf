@@ -1,19 +1,3 @@
-# variable "byte_length" {
-#   type = number
-# }
-
-# variable "rotation_lambda_zip" {
-#   description = "Path to the ZIP file for rotation lambda code (AWS sample)."
-#   type        = string
-#   default     = null
-# }
-
-# variable "cluster_parameter_family" {
-#   description = "Parameter group family for Aurora PostgreSQL."
-#   type        = string
-#   default     = "aurora-postgresql17"
-# }
-
 variable "database_name" {
   description = "Initial database name."
   type        = string
@@ -410,8 +394,62 @@ variable "log_min_error_statement" {
   default     = "error"
 }
 
-variable "log_error_verbosity" {
-  description = "Error verbosity: default | verbose | terse"
-  type        = string
-  default     = "default"
+variable "enable_comprehensive_alarms" {
+  description = "Enable comprehensive CloudWatch alarms for all Aurora PostgreSQL metrics."
+  type        = bool
+  default     = true
+}
+
+variable "memory_freeable_threshold" {
+  description = "Freeable memory threshold in bytes for alarm."
+  type        = number
+  default     = 1073741824 # 1GB
+}
+
+variable "database_connections_threshold" {
+  description = "Database connections threshold for alarm."
+  type        = number
+  default     = 80
+}
+
+variable "read_latency_threshold" {
+  description = "Read latency threshold in seconds for alarm."
+  type        = number
+  default     = 0.2
+}
+
+variable "write_latency_threshold" {
+  description = "Write latency threshold in seconds for alarm."
+  type        = number
+  default     = 0.2
+}
+
+variable "deadlock_threshold" {
+  description = "Deadlock threshold for alarm."
+  type        = number
+  default     = 5
+}
+
+variable "replica_lag_threshold" {
+  description = "Replica lag threshold in seconds for alarm."
+  type        = number
+  default     = 30
+}
+
+variable "buffer_cache_hit_ratio_threshold" {
+  description = "Buffer cache hit ratio threshold (percentage) for alarm."
+  type        = number
+  default     = 95
+}
+
+variable "disk_queue_depth_threshold" {
+  description = "Disk queue depth threshold for alarm."
+  type        = number
+  default     = 64
+}
+
+variable "swap_usage_threshold" {
+  description = "Swap usage threshold in bytes for alarm."
+  type        = number
+  default     = 268435456 # 256MB
 }
