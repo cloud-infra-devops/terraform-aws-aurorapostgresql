@@ -323,7 +323,7 @@ resource "random_id" "index" {
 
 # VPC endpoint for Secrets Manager to keep rotation traffic inside VPC
 resource "aws_vpc_endpoint" "secretsmanager" {
-  depends_on         = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, local.kms_key_arn]
+  # depends_on         = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, local.kms_key_arn]
   vpc_id             = var.vpc_id
   service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
   vpc_endpoint_type  = "Interface"
@@ -335,7 +335,7 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 
 # VPC endpoint for Lambda (for rotation function)
 resource "aws_vpc_endpoint" "lambda" {
-  depends_on         = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, local.kms_key_arn]
+  # depends_on         = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, local.kms_key_arn]
   vpc_id             = var.vpc_id
   service_name       = "com.amazonaws.${data.aws_region.current.region}.lambda"
   vpc_endpoint_type  = "Interface"
@@ -391,9 +391,25 @@ resource "aws_secretsmanager_secret_version" "db_master" {
   })
 }
 
-# IAM role to be assumed by Lambda rotation function (least privilege)
-resource "aws_iam_role" "rotation" {
-  name = "${local.cluster_identifier}-secret-rotation-role"
+# # IAM role to be assumed by Lambda rotation function (least privilege)
+# resource "aws_iam_role" "rotation" {
+#   name = "${local.cluster_identifier}-secret-rotation-role"
+#   assume_role_policy = jsonencode({
+#     Version = "2012-10-17",
+#     Statement = [{
+#       Effect    = "Allow",
+#       Principal = { Service = "lambda.amazonaws.com" },
+#       Action    = "sts:AssumeRole"
+#     }]
+#   })
+#   tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-role" })
+# }
+
+# AWS managed single-user rotation Lambda function code via Lambda ARN or deploying from AWS provided blueprint
+# Here we use the AWS managed rotation function hosted as a Lambda in your account via a published blueprint package.
+# For portability, we deploy a minimal lambda with VPC config, using container image or zip from AWS sample S3.
+resource "aws_iam_role" "lambda_exec" {
+  name = "${local.cluster_identifier}-lambda-exec-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -402,13 +418,52 @@ resource "aws_iam_role" "rotation" {
       Action    = "sts:AssumeRole"
     }]
   })
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-role" })
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-exec" })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  depends_on = [aws_iam_role.lambda_exec]
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Managed policy attachments and a minimal inline policy restricted to the secret and cluster
+# Allow Lambda access to VPC for Secrets Manager VPC Endpoint
+resource "aws_iam_role_policy" "lambda_vpc" {
+  depends_on = [local.kms_key_arn, aws_iam_role.lambda_exec]
+  name       = "${local.cluster_identifier}-lambda-vpc"
+  role       = aws_iam_role.lambda_exec.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface"
+        ],
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowKMSForLambdaEnv",
+        Effect = "Allow",
+        Action = [
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
+        ],
+        Resource = local.kms_key_arn
+      }
+    ]
+  })
 }
 # Inline policy for rotation role with least privilege
 resource "aws_iam_role_policy" "rotation_inline" {
   depends_on = [aws_secretsmanager_secret.db_master, local.kms_key_arn, aws_rds_cluster.this, aws_cloudwatch_log_group.postgresql]
   name       = "${local.cluster_identifier}-rotation-inline"
-  role       = aws_iam_role.rotation.id
+  role       = aws_iam_role.lambda_exec.id
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
@@ -462,59 +517,6 @@ resource "aws_iam_role_policy" "rotation_inline" {
           "logs:PutLogEvents"
         ]
         Resource = "*"
-      }
-    ]
-  })
-}
-# AWS managed single-user rotation Lambda function code via Lambda ARN or deploying from AWS provided blueprint
-# Here we use the AWS managed rotation function hosted as a Lambda in your account via a published blueprint package.
-# For portability, we deploy a minimal lambda with VPC config, using container image or zip from AWS sample S3.
-resource "aws_iam_role" "lambda_exec" {
-  name = "${local.cluster_identifier}-lambda-exec-role"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Principal = { Service = "lambda.amazonaws.com" },
-      Action    = "sts:AssumeRole"
-    }]
-  })
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-exec" })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-# Managed policy attachments and a minimal inline policy restricted to the secret and cluster
-# Allow Lambda access to VPC for Secrets Manager VPC Endpoint
-resource "aws_iam_role_policy" "lambda_vpc" {
-  depends_on = [local.kms_key_arn]
-  name       = "${local.cluster_identifier}-lambda-vpc"
-  role       = aws_iam_role.lambda_exec.id
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface"
-        ],
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowKMSForLambdaEnv",
-        Effect = "Allow",
-        Action = [
-          "kms:Decrypt",
-          "kms:Encrypt",
-          "kms:GenerateDataKey",
-          "kms:DescribeKey"
-        ],
-        Resource = local.kms_key_arn
       }
     ]
   })
@@ -573,7 +575,7 @@ resource "aws_lambda_function" "rotation" {
 
 # Resource policy for the secret limiting access to rotation role and account root
 resource "aws_secretsmanager_secret_policy" "secret_policy" {
-  depends_on = [aws_secretsmanager_secret.db_master, aws_iam_role.rotation]
+  depends_on = [aws_secretsmanager_secret.db_master, aws_iam_role.lambda_exec]
   secret_arn = aws_secretsmanager_secret.db_master.arn
   policy = jsonencode({
     Version = "2012-10-17",
@@ -582,7 +584,8 @@ resource "aws_secretsmanager_secret_policy" "secret_policy" {
         Sid    = "AllowRotationRoleAccess"
         Effect = "Allow"
         Principal = {
-          AWS = aws_iam_role.rotation.arn
+          # AWS = aws_iam_role.rotation.arn
+          AWS = aws_iam_role.lambda_exec.arn
         }
         Action = [
           "secretsmanager:GetSecretValue",
