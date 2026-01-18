@@ -20,8 +20,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-1"
-  # allowed_account_ids = ["211125325120"]
+  region = "us-west-2"
 }
 
 module "aurora_postgres_cluster" {
@@ -55,7 +54,7 @@ module "aurora_postgres_cluster" {
     Environment = "production"
     Owner       = "cloud-infra-devops"
     Project     = "aurora-postgresql"
-    Region      = "us-east-1"
+    Region      = "us-west-2"
   }
 }
 
@@ -80,7 +79,7 @@ resource "aws_cloudwatch_dashboard" "aurora_dashboard" {
           ]
           view    = "timeSeries"
           stacked = false
-          region  = "us-east-1"
+          region  = "us-west-2"
           title   = "Aurora PostgreSQL Performance Metrics"
           period  = 300
         }
