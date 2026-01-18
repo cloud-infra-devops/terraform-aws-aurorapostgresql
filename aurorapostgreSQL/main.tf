@@ -245,7 +245,6 @@ resource "aws_cloudwatch_log_group" "postgresql" {
 
 # Subnet group
 resource "aws_db_subnet_group" "this" {
-  depends_on = [aws_kms_key.this]
   name       = "${local.cluster_identifier}-subnet-group"
   subnet_ids = var.aurora_db_subnet_ids
   tags       = merge(var.tags, { Name = "${local.cluster_identifier}-subnet-group" })
@@ -269,7 +268,7 @@ resource "aws_rds_cluster_parameter_group" "this" {
 
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
-  depends_on                   = [aws_cloudwatch_log_group.postgresql]
+  depends_on                   = [aws_cloudwatch_log_group.postgresql, local.effective_master_password, local.kms_key_arn]
   cluster_identifier           = local.cluster_identifier
   engine                       = "aurora-postgresql"
   engine_version               = local.selected_engine_version
@@ -301,6 +300,7 @@ resource "aws_rds_cluster" "this" {
 
 # Instances
 resource "aws_rds_cluster_instance" "this" {
+  depends_on                      = [aws_rds_cluster.this]
   count                           = var.instance_count
   identifier                      = "${local.cluster_identifier}-${count.index}"
   cluster_identifier              = aws_rds_cluster.this.id
@@ -321,31 +321,9 @@ resource "random_id" "index" {
   byte_length = 2
 }
 
-# Secrets Manager secret for DB master credentials (encrypted with KMS)
-resource "aws_secretsmanager_secret" "db_master" {
-  name        = "${local.secret_name}-${random_id.index.hex}"
-  description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
-  kms_key_id  = local.kms_key_arn
-  tags        = merge(var.tags, { Name = "${local.secret_name}-${random_id.index.hex}" })
-}
-
-# Secret value
-resource "aws_secretsmanager_secret_version" "db_master" {
-  depends_on = [aws_secretsmanager_secret.db_master]
-  secret_id  = aws_secretsmanager_secret.db_master.id
-  secret_string = jsonencode({
-    username            = var.db_master_username
-    password            = local.effective_master_password
-    engine              = "postgres"
-    host                = aws_rds_cluster.this.endpoint
-    port                = var.port
-    dbname              = var.database_name
-    dbClusterIdentifier = aws_rds_cluster.this.id
-  })
-}
-
 # VPC endpoint for Secrets Manager to keep rotation traffic inside VPC
 resource "aws_vpc_endpoint" "secretsmanager" {
+  depends_on         = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, local.kms_key_arn]
   vpc_id             = var.vpc_id
   service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
   vpc_endpoint_type  = "Interface"
@@ -357,6 +335,7 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 
 # VPC endpoint for Lambda (for rotation function)
 resource "aws_vpc_endpoint" "lambda" {
+  depends_on         = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, local.kms_key_arn]
   vpc_id             = var.vpc_id
   service_name       = "com.amazonaws.${data.aws_region.current.region}.lambda"
   vpc_endpoint_type  = "Interface"
@@ -388,7 +367,31 @@ resource "aws_vpc_endpoint" "kms" {
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-kms-vpce" })
 }
 
-# IAM role used by Secrets Manager rotation function (least privilege)
+# Secrets Manager secret for DB master credentials (encrypted with KMS)
+resource "aws_secretsmanager_secret" "db_master" {
+  depends_on  = [local.kms_key_arn]
+  name        = "${local.secret_name}-${random_id.index.hex}"
+  description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
+  kms_key_id  = local.kms_key_arn
+  tags        = merge(var.tags, { Name = "${local.secret_name}-${random_id.index.hex}" })
+}
+
+# Secret value
+resource "aws_secretsmanager_secret_version" "db_master" {
+  depends_on = [aws_secretsmanager_secret.db_master, aws_rds_cluster.this, local.kms_key_arn]
+  secret_id  = aws_secretsmanager_secret.db_master.id
+  secret_string = jsonencode({
+    username            = var.db_master_username
+    password            = local.effective_master_password
+    engine              = "postgres"
+    host                = aws_rds_cluster.this.endpoint
+    port                = var.port
+    dbname              = var.database_name
+    dbClusterIdentifier = aws_rds_cluster.this.id
+  })
+}
+
+# IAM role to be assumed by Lambda rotation function (least privilege)
 resource "aws_iam_role" "rotation" {
   name = "${local.cluster_identifier}-secret-rotation-role"
   assume_role_policy = jsonencode({
@@ -402,10 +405,48 @@ resource "aws_iam_role" "rotation" {
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-role" })
 }
 
+# Resource policy for the secret limiting access to rotation role and account root
+resource "aws_secretsmanager_secret_policy" "secret_policy" {
+  depends_on = [aws_secretsmanager_secret.db_master, aws_iam_role.rotation]
+  secret_arn = aws_secretsmanager_secret.db_master.arn
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid    = "AllowRotationRoleAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.rotation.arn
+        }
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecretVersionStage"
+        ]
+        Resource = aws_secretsmanager_secret.db_master.arn
+      },
+      {
+        Sid    = "AllowAccountAdminRead"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = aws_secretsmanager_secret.db_master.arn
+      }
+    ]
+  })
+}
+
 # Managed policy attachments and a minimal inline policy restricted to the secret and cluster
 resource "aws_iam_role_policy" "rotation_inline" {
-  name = "${local.cluster_identifier}-rotation-inline"
-  role = aws_iam_role.rotation.id
+  depends_on = [aws_secretsmanager_secret.db_master, local.kms_key_arn, aws_rds_cluster.this, aws_cloudwatch_log_group.postgresql]
+  name       = "${local.cluster_identifier}-rotation-inline"
+  role       = aws_iam_role.rotation.id
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
@@ -463,19 +504,6 @@ resource "aws_iam_role_policy" "rotation_inline" {
     ]
   })
 }
-
-# If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
-# Rotation using AWS managed single-user rotation Lambda function
-resource "aws_secretsmanager_secret_rotation" "this" {
-  depends_on          = [aws_secretsmanager_secret_version.db_master, aws_lambda_function.rotation, aws_lambda_permission.allow_secretsmanager_invoke]
-  count               = var.enable_auto_secrets_rotation ? 1 : 0
-  secret_id           = aws_secretsmanager_secret.db_master.id
-  rotation_lambda_arn = aws_lambda_function.rotation.arn
-  rotation_rules {
-    automatically_after_days = var.rotation_days
-  }
-}
-
 # AWS managed single-user rotation Lambda function code via Lambda ARN or deploying from AWS provided blueprint
 # Here we use the AWS managed rotation function hosted as a Lambda in your account via a published blueprint package.
 # For portability, we deploy a minimal lambda with VPC config, using container image or zip from AWS sample S3.
@@ -499,8 +527,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 
 # Allow Lambda access to VPC for Secrets Manager VPC Endpoint
 resource "aws_iam_role_policy" "lambda_vpc" {
-  name = "${local.cluster_identifier}-lambda-vpc"
-  role = aws_iam_role.lambda_exec.id
+  depends_on = [local.kms_key_arn, aws_iam_role.lambda_exec]
+  name       = "${local.cluster_identifier}-lambda-vpc"
+  role       = aws_iam_role.lambda_exec.id
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
@@ -530,6 +559,7 @@ resource "aws_iam_role_policy" "lambda_vpc" {
 
 # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
 resource "aws_lambda_function" "rotation" {
+  depends_on       = [aws_iam_role.lambda_exec, local.kms_key_arn, aws_rds_cluster.this, aws_secretsmanager_secret.db_master]
   function_name    = "${local.cluster_identifier}-rotation"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
@@ -578,8 +608,12 @@ resource "aws_lambda_function" "rotation" {
   }
 }
 
+# Optional: Enable automatic rotation (default true)
+# If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
+
 # Allow Secrets Manager to invoke the rotation Lambda for this secret
 resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
+  depends_on    = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation]
   statement_id  = "AllowSecretsManagerInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.rotation.function_name
@@ -587,44 +621,20 @@ resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
   source_arn    = aws_secretsmanager_secret.db_master.arn
 }
 
-# Resource policy for the secret limiting access to rotation role and account root
-resource "aws_secretsmanager_secret_policy" "secret_policy" {
-  secret_arn = aws_secretsmanager_secret.db_master.arn
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid    = "AllowRotationRoleAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_iam_role.rotation.arn
-        }
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecretVersionStage"
-        ]
-        Resource = aws_secretsmanager_secret.db_master.arn
-      },
-      {
-        Sid    = "AllowAccountAdminRead"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ]
-        Resource = aws_secretsmanager_secret.db_master.arn
-      }
-    ]
-  })
+# Rotation using AWS managed single-user rotation Lambda function
+resource "aws_secretsmanager_secret_rotation" "this" {
+  depends_on          = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, aws_lambda_permission.allow_secretsmanager_invoke]
+  count               = var.enable_auto_secrets_rotation ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.db_master.id
+  rotation_lambda_arn = aws_lambda_function.rotation.arn
+  rotation_rules {
+    automatically_after_days = var.rotation_days
+  }
 }
 
 # CloudWatch metrics and alarms examples (optional)
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  depends_on          = [aws_rds_cluster.this, aws_rds_cluster_instance.this]
   count               = var.enable_metrics ? 1 : 0
   alarm_name          = "${local.cluster_identifier}-CPUUtilization-High"
   comparison_operator = "GreaterThanThreshold"
