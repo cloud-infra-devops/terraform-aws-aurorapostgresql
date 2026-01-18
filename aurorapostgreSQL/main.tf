@@ -638,7 +638,6 @@ resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
   function_name = aws_lambda_function.rotation.function_name
   principal     = "secretsmanager.amazonaws.com"
   source_arn    = aws_secretsmanager_secret.db_master.arn
-  qualifier     = aws_lambda_function.rotation.version
 }
 
 # Rotation using AWS managed single-user rotation Lambda function
