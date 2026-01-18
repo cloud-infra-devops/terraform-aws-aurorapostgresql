@@ -35,6 +35,7 @@ variable "aws_region" {
   type    = string
   default = "us-west-2"
 }
+
 module "aurora_postgres_cluster" {
   source                                     = "./aurorapostgreSQL"
   name                                       = var.name
@@ -51,7 +52,7 @@ module "aurora_postgres_cluster" {
   vpc_endpoint_subnet_ids                    = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
   lambda_subnet_ids                          = ["subnet-0260bb197628ace27", "subnet-0d316885c8257bf12"]
   db_master_username                         = "postgreSQLdbAdmin"
-  enable_auto_secrets_rotation               = true
+  enable_auto_secrets_rotation               = false
   rotation_days                              = 30
   use_existing_kms_key                       = false
   existing_kms_key_arn                       = null
