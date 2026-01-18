@@ -235,6 +235,15 @@ resource "random_password" "db_master" {
   override_special = "!#$%&()*+,-.:;<=>?[\\]^_{|}~" # excludes / @ " and includes allowed specials
 }
 
+# Optionally create a CloudWatch Logs group for PostgreSQL logs
+resource "aws_cloudwatch_log_group" "postgresql" {
+  count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
+  name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
+  tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
+}
+
 # Subnet group
 resource "aws_db_subnet_group" "this" {
   name       = "${local.cluster_identifier}-subnet-group"
@@ -243,7 +252,7 @@ resource "aws_db_subnet_group" "this" {
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
-  name        = "${local.cluster_identifier}-pg"
+  name        = local.cluster_identifier
   family      = local.cluster_parameter_family_effective
   description = "Aurora PostgreSQL parameter group for ${local.cluster_identifier}"
   # parameters = concat(
@@ -258,17 +267,7 @@ resource "aws_rds_cluster_parameter_group" "this" {
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-cluster-params" })
 }
 
-# Optionally create a CloudWatch Logs group for PostgreSQL logs
-resource "aws_cloudwatch_log_group" "postgresql" {
-  count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
-  name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
-  retention_in_days = var.log_retention_days
-  # kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
-  tags = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
-}
-
 # Cluster (ensure CloudWatch Logs export is enabled)
-# vpc_security_group_ids       = concat(aws_security_group.db.id, var.existing_aurora_db_security_group_ids)
 resource "aws_rds_cluster" "this" {
   depends_on                   = [aws_secretsmanager_secret.db_master, local.kms_key_arn, local.effective_master_password, local.selected_engine_version]
   cluster_identifier           = local.cluster_identifier
@@ -349,46 +348,46 @@ resource "aws_secretsmanager_secret_version" "db_master" {
 
 # VPC endpoint for Secrets Manager to keep rotation traffic inside VPC
 resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.vpc_endpoint_subnet_ids
-  security_group_ids  = local.vpce_sg_ids
-  private_dns_enabled = true
-  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
+  vpc_id             = var.vpc_id
+  service_name       = "com.amazonaws.${data.aws_region.current.region}.secretsmanager"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = var.vpc_endpoint_subnet_ids
+  security_group_ids = local.vpce_sg_ids
+  # private_dns_enabled = true
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-sm-vpce" })
 }
 
 # VPC endpoint for Lambda (for rotation function)
 resource "aws_vpc_endpoint" "lambda" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.region}.lambda"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.vpc_endpoint_subnet_ids
-  security_group_ids  = local.vpce_sg_ids
-  private_dns_enabled = true
-  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-vpce" })
+  vpc_id             = var.vpc_id
+  service_name       = "com.amazonaws.${data.aws_region.current.region}.lambda"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = var.vpc_endpoint_subnet_ids
+  security_group_ids = local.vpce_sg_ids
+  # private_dns_enabled = true
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-lambda-vpce" })
 }
 
 # VPC endpoint for CloudWatch Logs
 resource "aws_vpc_endpoint" "logs" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.region}.logs"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.vpc_endpoint_subnet_ids
-  security_group_ids  = local.vpce_sg_ids
-  private_dns_enabled = true
-  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-logs-vpce" })
+  vpc_id             = var.vpc_id
+  service_name       = "com.amazonaws.${data.aws_region.current.region}.logs"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = var.vpc_endpoint_subnet_ids
+  security_group_ids = local.vpce_sg_ids
+  # private_dns_enabled = true
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-logs-vpce" })
 }
 
 # VPC endpoint for KMS
 resource "aws_vpc_endpoint" "kms" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.region}.kms"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.vpc_endpoint_subnet_ids
-  security_group_ids  = local.vpce_sg_ids
-  private_dns_enabled = true
-  tags                = merge(var.tags, { Name = "${local.cluster_identifier}-kms-vpce" })
+  vpc_id             = var.vpc_id
+  service_name       = "com.amazonaws.${data.aws_region.current.region}.kms"
+  vpc_endpoint_type  = "Interface"
+  subnet_ids         = var.vpc_endpoint_subnet_ids
+  security_group_ids = local.vpce_sg_ids
+  # private_dns_enabled = true
+  tags = merge(var.tags, { Name = "${local.cluster_identifier}-kms-vpce" })
 }
 
 # IAM role used by Secrets Manager rotation function (least privilege)
