@@ -23,9 +23,14 @@ provider "aws" {
   region = "us-west-2"
 }
 
+variable "name" {
+  type    = string
+  default = "duke-app"
+}
+
 module "aurora_postgres_cluster" {
   source                                     = "./aurorapostgreSQL"
-  name                                       = "duke-app"
+  name                                       = var.name
   vpc_id                                     = "vpc-07b3e9e8021bfb088"
   vpc_cidr                                   = "172.16.0.0/16"
   allowed_other_ingress_cidrs                = ["10.0.0.0/8", "192.168.0.0/16"]
@@ -60,7 +65,7 @@ module "aurora_postgres_cluster" {
 
 # Additional CloudWatch Dashboard
 resource "aws_cloudwatch_dashboard" "aurora_dashboard" {
-  dashboard_name = "Aurora-PostgreSQL-${module.aurora_postgres_cluster.cluster_arn}"
+  dashboard_name = "Aurora-PostgreSQL-${var.name}"
 
   dashboard_body = jsonencode({
     widgets = [

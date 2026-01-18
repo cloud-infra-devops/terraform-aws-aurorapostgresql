@@ -240,12 +240,12 @@ resource "aws_cloudwatch_log_group" "postgresql" {
   count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
   name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
   retention_in_days = var.log_retention_days
-  kms_key_id        = local.kms_key_arn
   tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
 # Subnet group
 resource "aws_db_subnet_group" "this" {
+  depends_on = [aws_kms_key.this]
   name       = "${local.cluster_identifier}-subnet-group"
   subnet_ids = var.aurora_db_subnet_ids
   tags       = merge(var.tags, { Name = "${local.cluster_identifier}-subnet-group" })
@@ -269,6 +269,7 @@ resource "aws_rds_cluster_parameter_group" "this" {
 
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
+  depends_on                   = [aws_cloudwatch_log_group.postgresql]
   cluster_identifier           = local.cluster_identifier
   engine                       = "aurora-postgresql"
   engine_version               = local.selected_engine_version
@@ -466,7 +467,7 @@ resource "aws_iam_role_policy" "rotation_inline" {
 # If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
 # Rotation using AWS managed single-user rotation Lambda function
 resource "aws_secretsmanager_secret_rotation" "this" {
-  depends_on          = [aws_secretsmanager_secret_version.db_master, aws_lambda_function.rotation]
+  depends_on          = [aws_secretsmanager_secret_version.db_master, aws_lambda_function.rotation, aws_lambda_permission.allow_secretsmanager_invoke]
   count               = var.enable_auto_secrets_rotation ? 1 : 0
   secret_id           = aws_secretsmanager_secret.db_master.id
   rotation_lambda_arn = aws_lambda_function.rotation.arn
