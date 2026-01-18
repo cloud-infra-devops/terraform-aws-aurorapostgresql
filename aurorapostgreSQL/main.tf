@@ -237,11 +237,10 @@ resource "random_password" "db_master" {
 
 # Optionally create a CloudWatch Logs group for PostgreSQL logs
 resource "aws_cloudwatch_log_group" "postgresql" {
-  depends_on        = [aws_kms_key.this, local.kms_key_arn]
   count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
   name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
   retention_in_days = var.log_retention_days
-  kms_key_id        = local.kms_key_arn # remove/comment to avoid KMS access error
+  kms_key_id        = local.kms_key_arn
   tags              = merge(var.tags, { Name = "${local.cluster_identifier}-postgresql-logs" })
 }
 
@@ -270,7 +269,6 @@ resource "aws_rds_cluster_parameter_group" "this" {
 
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
-  depends_on                   = [aws_secretsmanager_secret.db_master, aws_kms_key.this, local.kms_key_arn, local.effective_master_password, local.selected_engine_version]
   cluster_identifier           = local.cluster_identifier
   engine                       = "aurora-postgresql"
   engine_version               = local.selected_engine_version
@@ -302,7 +300,6 @@ resource "aws_rds_cluster" "this" {
 
 # Instances
 resource "aws_rds_cluster_instance" "this" {
-  depends_on                      = [aws_secretsmanager_secret.db_master, aws_kms_key.this, aws_rds_cluster.this]
   count                           = var.instance_count
   identifier                      = "${local.cluster_identifier}-${count.index}"
   cluster_identifier              = aws_rds_cluster.this.id
@@ -325,7 +322,6 @@ resource "random_id" "index" {
 
 # Secrets Manager secret for DB master credentials (encrypted with KMS)
 resource "aws_secretsmanager_secret" "db_master" {
-  depends_on  = [aws_kms_key.this, local.kms_key_arn]
   name        = "${local.secret_name}-${random_id.index.hex}"
   description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
   kms_key_id  = local.kms_key_arn
@@ -533,7 +529,6 @@ resource "aws_iam_role_policy" "lambda_vpc" {
 
 # Minimal lambda function stub; in practice use AWS sample for single-user rotation from Secrets Manager docs.
 resource "aws_lambda_function" "rotation" {
-  depends_on       = [aws_vpc_endpoint.secretsmanager, aws_vpc_endpoint.lambda, aws_vpc_endpoint.logs, aws_vpc_endpoint.kms, local.kms_key_arn]
   function_name    = "${local.cluster_identifier}-rotation"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
