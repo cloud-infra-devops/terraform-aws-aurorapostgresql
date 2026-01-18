@@ -237,6 +237,7 @@ resource "random_password" "db_master" {
 
 # Optionally create a CloudWatch Logs group for PostgreSQL logs
 resource "aws_cloudwatch_log_group" "postgresql" {
+  depends_on        = [aws_kms_key.this, local.kms_key_arn]
   count             = var.enable_error_logs || var.enable_slow_query_logs ? 1 : 0
   name              = "/aws/rds/cluster/${local.cluster_identifier}/postgresql"
   retention_in_days = var.log_retention_days
@@ -269,7 +270,7 @@ resource "aws_rds_cluster_parameter_group" "this" {
 
 # Cluster (ensure CloudWatch Logs export is enabled)
 resource "aws_rds_cluster" "this" {
-  depends_on                   = [aws_secretsmanager_secret.db_master, local.kms_key_arn, local.effective_master_password, local.selected_engine_version]
+  depends_on                   = [aws_secretsmanager_secret.db_master, aws_kms_key.this, local.kms_key_arn, local.effective_master_password, local.selected_engine_version]
   cluster_identifier           = local.cluster_identifier
   engine                       = "aurora-postgresql"
   engine_version               = local.selected_engine_version
@@ -301,7 +302,7 @@ resource "aws_rds_cluster" "this" {
 
 # Instances
 resource "aws_rds_cluster_instance" "this" {
-  depends_on                      = [aws_secretsmanager_secret.db_master, aws_rds_cluster.this]
+  depends_on                      = [aws_secretsmanager_secret.db_master, aws_kms_key.this, aws_rds_cluster.this]
   count                           = var.instance_count
   identifier                      = "${local.cluster_identifier}-${count.index}"
   cluster_identifier              = aws_rds_cluster.this.id
@@ -324,7 +325,7 @@ resource "random_id" "index" {
 
 # Secrets Manager secret for DB master credentials (encrypted with KMS)
 resource "aws_secretsmanager_secret" "db_master" {
-  depends_on  = [local.kms_key_arn]
+  depends_on  = [aws_kms_key.this, local.kms_key_arn]
   name        = "${local.secret_name}-${random_id.index.hex}"
   description = "Aurora PostgreSQL master credentials for ${local.cluster_identifier}"
   kms_key_id  = local.kms_key_arn
