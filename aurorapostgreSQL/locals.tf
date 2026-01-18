@@ -16,14 +16,13 @@ data "aws_partition" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  depends_on = [aws_kms_key.this, aws_secretsmanager_secret.db_master, random_password.db_master]
   effective_master_password = var.db_master_password != null ? var.db_master_password : (
     var.generate_master_password ? random_password.db_master[0].result : null
   )
   aurora_db_sg_ids        = var.use_existing_aurora_db_sg && length(var.existing_aurora_db_security_group_ids) > 0 ? var.existing_aurora_db_security_group_ids : [aws_security_group.db.id]
   vpce_sg_ids             = var.use_existing_vpce_sg && length(var.existing_vpce_security_group_ids) > 0 ? var.existing_vpce_security_group_ids : [aws_security_group.vpce.id]
   lambda_rotator_sg_ids   = var.use_existing_lambda_rotator_sg && length(var.existing_lambda_rotator_security_group_ids) > 0 ? var.existing_lambda_rotator_security_group_ids : [aws_security_group.rotator_lambda_security_group.id]
-  kms_key_arn             = var.use_existing_kms_key && var.existing_kms_key_arn != null ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
+  kms_key_arn             = var.use_existing_kms_key ? var.existing_kms_key_arn : aws_kms_key.this[0].arn
   cluster_identifier      = var.cluster_identifier != null ? var.cluster_identifier : "${var.name}-aurora-pg"
   selected_engine_version = var.engine_version != null ? var.engine_version : data.aws_rds_engine_version.aurora_pg_versions.version
   # Derive the parameter group family from the selected engine version (major component)
