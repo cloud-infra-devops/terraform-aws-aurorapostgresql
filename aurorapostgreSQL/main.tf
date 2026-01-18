@@ -404,45 +404,7 @@ resource "aws_iam_role" "rotation" {
   })
   tags = merge(var.tags, { Name = "${local.cluster_identifier}-rotation-role" })
 }
-
-# Resource policy for the secret limiting access to rotation role and account root
-resource "aws_secretsmanager_secret_policy" "secret_policy" {
-  depends_on = [aws_secretsmanager_secret.db_master, aws_iam_role.rotation]
-  secret_arn = aws_secretsmanager_secret.db_master.arn
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid    = "AllowRotationRoleAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_iam_role.rotation.arn
-        }
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecretVersionStage"
-        ]
-        Resource = aws_secretsmanager_secret.db_master.arn
-      },
-      {
-        Sid    = "AllowAccountAdminRead"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ]
-        Resource = aws_secretsmanager_secret.db_master.arn
-      }
-    ]
-  })
-}
-
-# Managed policy attachments and a minimal inline policy restricted to the secret and cluster
+# Inline policy for rotation role with least privilege
 resource "aws_iam_role_policy" "rotation_inline" {
   depends_on = [aws_secretsmanager_secret.db_master, local.kms_key_arn, aws_rds_cluster.this, aws_cloudwatch_log_group.postgresql]
   name       = "${local.cluster_identifier}-rotation-inline"
@@ -525,9 +487,10 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# Managed policy attachments and a minimal inline policy restricted to the secret and cluster
 # Allow Lambda access to VPC for Secrets Manager VPC Endpoint
 resource "aws_iam_role_policy" "lambda_vpc" {
-  depends_on = [local.kms_key_arn, aws_iam_role.lambda_exec]
+  depends_on = [local.kms_key_arn]
   name       = "${local.cluster_identifier}-lambda-vpc"
   role       = aws_iam_role.lambda_exec.id
   policy = jsonencode({
@@ -608,12 +571,49 @@ resource "aws_lambda_function" "rotation" {
   }
 }
 
+# Resource policy for the secret limiting access to rotation role and account root
+resource "aws_secretsmanager_secret_policy" "secret_policy" {
+  depends_on = [aws_secretsmanager_secret.db_master, aws_iam_role.rotation]
+  secret_arn = aws_secretsmanager_secret.db_master.arn
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid    = "AllowRotationRoleAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.rotation.arn
+        }
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecretVersionStage"
+        ]
+        Resource = aws_secretsmanager_secret.db_master.arn
+      },
+      {
+        Sid    = "AllowAccountAdminRead"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = aws_secretsmanager_secret.db_master.arn
+      }
+    ]
+  })
+}
+
 # Optional: Enable automatic rotation (default true)
 # If user wants manual rotation only, set enable_auto_secrets_rotation=false and they can trigger rotation manually in console/CLI.
 
 # Allow Secrets Manager to invoke the rotation Lambda for this secret
 resource "aws_lambda_permission" "allow_secretsmanager_invoke" {
-  depends_on    = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation]
+  depends_on    = [aws_secretsmanager_secret.db_master, aws_lambda_function.rotation, aws_secretsmanager_secret_policy.secret_policy]
   statement_id  = "AllowSecretsManagerInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.rotation.function_name
