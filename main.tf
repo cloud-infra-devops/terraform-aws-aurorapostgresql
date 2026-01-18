@@ -20,14 +20,21 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-west-2"
+  region = var.aws_region
 }
 
 variable "name" {
   type    = string
   default = "duke-app"
 }
-
+variable "environment" {
+  type    = string
+  default = "dev"
+}
+variable "aws_region" {
+  type    = string
+  default = "us-west-2"
+}
 module "aurora_postgres_cluster" {
   source                                     = "./aurorapostgreSQL"
   name                                       = var.name
@@ -56,10 +63,10 @@ module "aurora_postgres_cluster" {
   enable_metrics                             = true
   enable_comprehensive_alarms                = true
   tags = {
-    Environment = "production"
+    Environment = var.environment
     Owner       = "cloud-infra-devops"
     Project     = "aurora-postgresql"
-    Region      = "us-west-2"
+    Region      = var.aws_region
   }
 }
 
@@ -84,7 +91,7 @@ resource "aws_cloudwatch_dashboard" "aurora_dashboard" {
           ]
           view    = "timeSeries"
           stacked = false
-          region  = "us-west-2"
+          region  = var.aws_region
           title   = "Aurora PostgreSQL Performance Metrics"
           period  = 300
         }
